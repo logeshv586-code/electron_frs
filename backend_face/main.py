@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -311,6 +311,92 @@ async def root():
             "capture": "/capture_face_upload or /capture_face_b64"
         }
     }
+
+# ============= ATTENDANCE ENDPOINTS =============
+
+@app.get("/api/attendance", tags=["Attendance"])
+async def get_daily_attendance(date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format")):
+    """Get daily attendance for employees (First In / Last Out)"""
+    try:
+        from event.event_api import filter_faces
+        from datetime import datetime
+        
+        # Default to today if no date provided
+        target_date = date if date else datetime.now().strftime("%Y-%m-%d")
+        
+        # Load all registered persons to identify employees
+        from registration.reg import MetadataManager
+        metadata = MetadataManager.load_metadata()
+        
+        # Normalize metadata structure (it seems to be a flat dict of persons in metadata.json)
+        employees = {}
+        for key, person in metadata.items():
+            if isinstance(person, dict) and person.get("category", "").lower() == "employee":
+                employees[person.get("name", key)] = {
+                    "name": person.get("name", key),
+                    "photo_path": person.get("photo_path", ""),
+                    "category": "employee"
+                }
+        
+        if not employees:
+            return []
+
+        # Get all face events for the target date
+        all_events = await filter_faces(from_date=target_date, to_date=target_date)
+        
+        # Process events for each employee
+        attendance_results = []
+        for employee_name, employee_info in employees.items():
+            # Filter events for this specific employee
+            person_events = [e for e in all_events if e["name"].lower() == employee_name.lower() and e["type"] == "known"]
+            
+            if not person_events:
+                # Absent or not yet seen
+                attendance_results.append({
+                    "name": employee_name,
+                    "photo_url": convert_file_path_to_url(employee_info["photo_path"]),
+                    "first_in": None,
+                    "last_out": None,
+                    "total_punches": 0,
+                    "status": "Absent",
+                    "date": target_date
+                })
+                continue
+            
+            # Sort events by timestamp
+            person_events.sort(key=lambda x: x["timestamp"])
+            
+            first_in = person_events[0]["timestamp"]
+            last_out = person_events[-1]["timestamp"]
+            total_punches = len(person_events)
+            
+            # Simple status logic: if First In is after 10:00 AM, marked as Late
+            # (This can be customized later with specific employee schedules)
+            status = "Present"
+            try:
+                first_in_dt = datetime.fromisoformat(first_in.replace('Z', '+00:00'))
+                if first_in_dt.hour >= 10:
+                    status = "Late"
+            except:
+                pass
+
+            attendance_results.append({
+                "name": employee_name,
+                "photo_url": convert_file_path_to_url(employee_info["photo_path"]),
+                "first_in": first_in,
+                "last_out": last_out,
+                "total_punches": total_punches,
+                "status": status,
+                "date": target_date
+            })
+            
+        # Sort results: Present/Late first, then Absent
+        attendance_results.sort(key=lambda x: (x["status"] == "Absent", x["name"]))
+        
+        return attendance_results
+    except Exception as e:
+        logger.error(f"Error getting attendance: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============= ANALYTICS ENDPOINTS =============
 

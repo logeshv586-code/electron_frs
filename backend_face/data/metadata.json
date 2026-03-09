@@ -1,16 +1,4 @@
 {
-    "rahman": {
-        "name": "rahman",
-        "age": "22",
-        "gender": "Male",
-        "category": "employee",
-        "registration_date": "2025-11-08T11:33:04.153329",
-        "gallery_path": "data/gallery/rahman",
-        "photo_path": "data/gallery/rahman/1.jpg",
-        "age_range": "N/A",
-        "age_source": "unknown",
-        "predicted_age": null
-    },
     "logesh": {
         "name": "Logesh",
         "age": "24",
@@ -24,17 +12,16 @@
         "predicted_age": 24,
         "predicted_gender": "Male"
     },
-    "ram": {
-        "name": "Ram",
-        "age": "24",
+    "rahman": {
+        "name": "rahman",
+        "age": "22",
         "gender": "Male",
         "category": "employee",
-        "registration_date": "2026-02-26T12:30:38.517574",
-        "gallery_path": "data/gallery/ram",
-        "photo_path": "data/gallery/ram/1.jpg",
-        "age_range": "23-28",
-        "age_source": "ai",
-        "predicted_age": 24,
-        "predicted_gender": "Male"
+        "registration_date": "2025-11-08T11:33:04.153329",
+        "gallery_path": "data/gallery/rahman",
+        "photo_path": "data/gallery/rahman/1.jpg",
+        "age_range": "N/A",
+        "age_source": "unknown",
+        "predicted_age": null
     }
 }

@@ -10,6 +10,7 @@ import Dashboard from './components/dashboard/Dashboard';
 import { CameraProvider } from './components/camera/CameraManager';
 import SimpleCameraManager from './components/camera/SimpleCameraManager';
 import StreamViewer from './components/StreamViewer';
+import AttendanceList from './components/AttendanceList';
 import AnimatedLoginPage from './components/auth/AnimatedLoginPage';
 import UserManagement from './components/admin/UserManagement';
 import Settings from './components/admin/Settings';
@@ -28,7 +29,7 @@ const AppContent = () => {
       try {
         const workingUrl = await detectBackendUrl();
         const currentUrl = localStorage.getItem('api_base_url');
-        
+
         // If we found a working URL
         if (workingUrl) {
           // If it's different from what we have saved (or we have nothing saved)
@@ -47,7 +48,7 @@ const AppContent = () => {
             window.location.reload();
             return;
           }
-          
+
           console.warn('No backend server detected.');
         }
       } catch (error) {
@@ -56,7 +57,7 @@ const AppContent = () => {
         setIsCheckingBackend(false);
       }
     };
-    
+
     checkBackend();
   }, []);
 
@@ -85,8 +86,8 @@ const AppContent = () => {
         return <EventsWidget />;
       case 'registration':
         return <RegistrationWidget />;
-      case 'matching':
-        return <FaceMatching />;
+      case 'attendance':
+        return <AttendanceList />;
       case 'video':
         return <VideoWidget />;
       case 'camera':

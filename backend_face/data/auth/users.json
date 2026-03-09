@@ -1,0 +1,63 @@
+{
+  "eagleai": {
+    "id": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "username": "eagleai",
+    "role": "SuperAdmin",
+    "created_by": null,
+    "menus": [
+      "dashboard",
+      "registration",
+      "gallery",
+      "events",
+      "matching",
+      "video",
+      "camera",
+      "stream-viewer",
+      "admin",
+      "audit"
+    ],
+    "camera_limit": null,
+    "assigned_cameras": [],
+    "is_active": true,
+    "created_at": "2026-02-04T09:24:51.672774+00:00",
+    "updated_at": "2026-02-04T09:24:51.672774+00:00",
+    "hashed_password": "$2b$12$CeNySot6EK00L.FTN7dwg.hxdE03x6fD3Lt.skqdMyCWTwAxUuw3K"
+  },
+  "admin1": {
+    "username": "admin1",
+    "hashed_password": "$2b$12$cSUyNHoQXcBtdpTqXK1MyeGBvAu74WkSJwqtJuDhzPQs5a4OOh8Su",
+    "role": "Admin",
+    "email": "admin1@gmail.com",
+    "is_active": true,
+    "created_by": "eagleai",
+    "created_at": "2024-01-01T00:00:00Z",
+    "assigned_cameras": [],
+    "assigned_menus": [
+      "dashboard",
+      "users",
+      "gallery",
+      "events",
+      "registration"
+    ],
+    "max_users_limit": 9,
+    "max_cameras_limit": 5,
+    "license_start_date": "2026-02-13T12:53:19.127Z",
+    "license_end_date": "2028-02-13T12:53:19.127Z"
+  },
+  "super1": {
+    "username": "super1",
+    "hashed_password": "$2b$12$46duuOedRm2Y7Qxg.wr3x.d8LY5NXMKPJ1RE3mCrixp665fIjDHY.",
+    "role": "Supervisor",
+    "email": "super@gmail.com",
+    "is_active": true,
+    "created_by": "admin1",
+    "created_at": "2024-01-01T00:00:00Z",
+    "assigned_cameras": [],
+    "assigned_menus": [
+      "stream-viewer",
+      "dashboard"
+    ],
+    "max_users_limit": 0,
+    "max_cameras_limit": 0
+  }
+}

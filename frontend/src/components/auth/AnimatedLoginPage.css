@@ -1,0 +1,891 @@
+/* Professional Cyber-Security Face Recognition System Styles - TITAN X Theme */
+
+:root {
+  --cyber-primary: #0066ff;
+  --cyber-secondary: #3388ff;
+  --cyber-accent: #0044cc;
+  --cyber-dark: #050505;
+  --cyber-dark-secondary: #111111;
+  --cyber-glow: rgba(0, 102, 255, 0.2);
+  --cyber-glow-strong: rgba(0, 102, 255, 0.4);
+  --success-color: #05CD99;
+  --error-color: #EE5D50;
+  --text-main: #ffffff;
+  --text-secondary: #a0a0a0;
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --card-border: rgba(255, 255, 255, 0.1);
+}
+
+/* Reset & Container */
+.animated-login-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  background: transparent;
+  font-family: 'DM Sans', 'Inter', sans-serif;
+  color: var(--text-main);
+  transition: all 0.5s ease-in-out;
+}
+
+.animated-login-container.exiting {
+  opacity: 0;
+  transform: scale(1.1);
+  filter: blur(10px);
+}
+
+.login-background-video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: -1;
+}
+
+.main-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+}
+
+/* Main Wrapper - The "Card" */
+.glass-wrapper {
+  display: flex;
+  width: 900px;
+  max-width: 95vw;
+  height: 600px;
+  max-height: 90vh;
+  border-radius: 30px;
+  overflow: hidden;
+  box-shadow:
+    0 10px 25px -5px rgba(0, 0, 0, 0.5),
+    0 0 20px rgba(0, 102, 255, 0.1);
+  border: 1px solid var(--card-border);
+  background: rgba(17, 17, 17, 0.3);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  /* Optimization: Force GPU layer */
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* Left Side - Login Form (Glass) */
+.login-section {
+  flex: 1;
+  background: rgba(10, 10, 10, 0.4);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 40px 50px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-right: 1px solid var(--card-border);
+  position: relative;
+  /* Optimization */
+  will-change: backdrop-filter;
+}
+
+.login-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Right Side - Visual (Dark Card) */
+.visual-section {
+  flex: 1;
+  background: rgba(5, 5, 5, 0.2);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.visual-content {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* Typography */
+.login-header {
+  text-align: center;
+  margin-bottom: 24px;
+  position: relative;
+  z-index: 2;
+}
+
+.login-title {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-shadow: 0 0 10px rgba(0, 102, 255, 0.3);
+}
+
+/* Form Elements */
+.login-form {
+  width: 100%;
+  max-width: 350px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+}
+
+.form-group {
+  margin-bottom: 25px;
+  position: relative;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.input-with-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Increased specificity to override other styles */
+.animated-login-container .form-input {
+  width: 100%;
+  padding: 15px 15px 15px 45px;
+  /* Added left padding for icon */
+  background: transparent !important;
+  border: 1px solid var(--card-border) !important;
+  border-radius: 4px;
+  /* Slightly rounded for Titan theme */
+  font-size: 16px;
+  color: var(--text-main) !important;
+  transition: all 0.3s ease;
+  font-family: 'DM Sans', monospace;
+}
+
+/* Ensure select element is strictly transparent and remove default OS styling */
+.animated-login-container select.form-input {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  height: auto;
+  /* Override browser default 34px so text is visible */
+  background-color: transparent !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a0a0a0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 15px center;
+  background-size: 16px;
+  padding-left: 15px;
+  /* No icon, so reduce left padding */
+  padding-right: 40px;
+  /* Make space for the custom arrow */
+  color: var(--text-main) !important;
+  border-color: var(--card-border) !important;
+}
+
+/* Fix for Select Options Visibility */
+.form-input option {
+  background-color: #111;
+  color: #fff;
+}
+
+.animated-login-container .form-input:focus {
+  outline: none;
+  border-color: var(--cyber-primary) !important;
+  box-shadow: 0 0 10px rgba(0, 102, 255, 0.2) !important;
+  background: transparent !important;
+}
+
+/* Handle Autofill background */
+.form-input:-webkit-autofill,
+.form-input:-webkit-autofill:hover,
+.form-input:-webkit-autofill:focus,
+.form-input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 30px rgba(0, 0, 0, 0) inset !important;
+  -webkit-text-fill-color: var(--text-main) !important;
+  transition: background-color 5000s ease-in-out 0s;
+  background-color: transparent !important;
+}
+
+.form-input::placeholder {
+  color: #666;
+}
+
+/* Icons positioned absolute right */
+.input-icon {
+  position: absolute;
+  left: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+
+.toggle-password {
+  position: absolute;
+  right: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 5px;
+  transition: color 0.3s ease;
+  z-index: 5;
+}
+
+.input-icon:hover,
+.toggle-password:hover {
+  color: var(--cyber-primary);
+}
+
+.password-wrapper .form-input {
+  padding-right: 45px;
+}
+
+.toggle-password {
+  right: 15px;
+}
+
+.password-icon {
+  pointer-events: none;
+}
+
+/* Button */
+.login-button {
+  width: 100%;
+  padding: 15px;
+  background: linear-gradient(135deg, var(--cyber-primary) 0%, var(--cyber-accent) 100%);
+  border: none;
+  border-radius: 8px;
+  /* Matching input radius */
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(0, 102, 255, 0.4);
+  transition: all 0.3s ease;
+  margin-top: 10px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  position: relative;
+  overflow: hidden;
+}
+
+.login-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+.login-button:hover::before {
+  left: 100%;
+}
+
+.login-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 102, 255, 0.6);
+}
+
+.login-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  background: #333;
+}
+
+/* Footer */
+.form-footer {
+  margin-top: 30px;
+  text-align: center;
+  position: relative;
+  z-index: 2;
+}
+
+.login-help-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.7;
+}
+
+/* Professional Face Recognition 3D Model */
+.scene-container {
+  z-index: 10;
+  transform: scale(0.85);
+  position: relative;
+  width: 300px;
+  height: 300px;
+  margin: 0 auto;
+  perspective: 800px;
+}
+
+/* Advanced Face Recognition Cube */
+.face-recognition-cube {
+  width: 200px;
+  height: 200px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-style: preserve-3d;
+  transform: translate3d(-50%, -50%, 0) rotateX(-15deg) rotateY(25deg);
+  animation: cyberRotate 20s linear infinite;
+  /* GPU optimization for Electron */
+  will-change: transform;
+}
+
+.face-recognition-cube.login-active {
+  animation: cyberLogin 3s ease-in-out;
+}
+
+@keyframes cyberRotate {
+  0% {
+    transform: translate(-50%, -50%) rotateX(-15deg) rotateY(0deg);
+  }
+
+  100% {
+    transform: translate(-50%, -50%) rotateX(-15deg) rotateY(360deg);
+  }
+}
+
+@keyframes cyberLogin {
+  0% {
+    transform: translate(-50%, -50%) rotateX(-15deg) rotateY(0deg) scale(1);
+  }
+
+  50% {
+    transform: translate(-50%, -50%) rotateX(-15deg) rotateY(180deg) scale(1.1);
+  }
+
+  100% {
+    transform: translate(-50%, -50%) rotateX(-15deg) rotateY(360deg) scale(1);
+  }
+}
+
+/* Cyber Security Face */
+.cube-face {
+  position: absolute;
+  width: 200px;
+  height: 200px;
+  background: url('../../icon/faceicon.png') no-repeat center center;
+  background-size: cover;
+  border: 1px solid rgba(0, 98, 255, 0.3);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  box-shadow: 0 0 15px rgba(0, 102, 255, 0.1);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* Add a static internal glow via pseudo-element to avoid repainting the main face */
+.cube-face::before {
+  content: '';
+  position: absolute;
+  width: 90%;
+  height: 90%;
+  border: 1px solid var(--cyber-primary);
+  border-radius: 10px;
+  /* Optimization: Simple border, no shadow */
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.cube-face::after {
+  content: '';
+  display: none;
+}
+
+@keyframes faceScan {
+
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.cube-face.front {
+  transform: translate3d(0, 0, 100px);
+}
+
+.cube-face.back {
+  transform: translate3d(0, 0, -100px) rotateY(180deg);
+}
+
+.cube-face.right {
+  transform: rotateY(90deg) translate3d(0, 0, 100px);
+}
+
+.cube-face.left {
+  transform: rotateY(-90deg) translate3d(0, 0, 100px);
+}
+
+.cube-face.top {
+  transform: rotateX(90deg) translate3d(0, 0, 100px);
+}
+
+.cube-face.bottom {
+  transform: rotateX(-90deg) translate3d(0, 0, 100px);
+}
+
+/* Success State */
+.cube-face.success-glow {
+  animation: successCyberGlow 2s ease-in-out infinite;
+  will-change: box-shadow, border-color;
+  /* Optimization */
+}
+
+@keyframes successCyberGlow {
+
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 10px var(--cyber-glow),
+      0 0 5px var(--cyber-glow);
+    border-color: var(--cyber-primary);
+  }
+
+  50% {
+    box-shadow:
+      inset 0 0 15px rgba(5, 205, 153, 0.3),
+      0 0 15px rgba(5, 205, 153, 0.5);
+    /* Reduced spread */
+    border-color: var(--success-color);
+  }
+}
+
+/* Enhanced Particles */
+.particles {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+  display: none;
+}
+
+.particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: var(--cyber-primary);
+  border-radius: 50%;
+  animation: cyberParticleFloat 15s infinite linear;
+  opacity: 0.4;
+  will-change: transform, opacity;
+  box-shadow: 0 0 5px var(--cyber-primary);
+}
+
+.particle:nth-child(1) {
+  left: 10%;
+  animation-delay: 0s;
+}
+
+.particle:nth-child(2) {
+  left: 30%;
+  animation-delay: 3s;
+}
+
+.particle:nth-child(3) {
+  left: 50%;
+  animation-delay: 6s;
+}
+
+.particle:nth-child(4) {
+  left: 70%;
+  animation-delay: 2s;
+}
+
+.particle:nth-child(5) {
+  left: 90%;
+  animation-delay: 4s;
+}
+
+@keyframes cyberParticleFloat {
+  0% {
+    transform: translateY(100vh) scale(0);
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+
+  90% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+
+  100% {
+    transform: translateY(-100px) scale(0);
+    opacity: 0;
+  }
+}
+
+/* Professional Authentication Coin */
+.auth-coin {
+  position: absolute;
+  top: 10%;
+  left: 50%;
+  transform: translate3d(-50%, 0, 0);
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 20;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+  font-family: 'DM Sans', monospace;
+  font-weight: 700;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--cyber-primary);
+  animation: authCoinFloat 4s linear infinite;
+  transition: transform 2.5s cubic-bezier(0.4, 0, 0.2, 1),
+    top 2.5s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.5s ease,
+    box-shadow 0.5s ease;
+  will-change: transform, top, opacity;
+  /* GPU + 3D rendering context */
+  transform-style: preserve-3d;
+}
+
+.coin-face {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 50%;
+  background-color: var(--cyber-dark);
+  transform: translateZ(0);
+  /* GPU layer */
+}
+
+.coin-face.front {
+  transform: rotateY(0deg);
+}
+
+.coin-face.back {
+  transform: rotateY(180deg);
+}
+
+/* Removed .auth-coin::before to remove the line */
+.auth-coin::before {
+  display: none;
+}
+
+@keyframes authCoinRotate {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.auth-coin.inserting {
+  top: 50%;
+  transform: translate3d(-50%, 0, 0) scale(0.6) rotateY(360deg);
+  animation: none;
+  transition: transform 1.5s cubic-bezier(0.4, 0, 0.2, 1),
+    top 1.5s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.5s ease;
+  z-index: 5;
+}
+
+.auth-coin.success {
+  top: 50%;
+  transform: translate3d(-50%, 0, 0) scale(0);
+  opacity: 0;
+  transition: transform 0.5s ease-in,
+    opacity 0.5s ease-in,
+    box-shadow 0.3s ease;
+  box-shadow: 0 0 50px var(--success-color);
+}
+
+.auth-coin.failed {
+  background: linear-gradient(135deg, var(--error-color), #ff3333);
+  border-color: var(--error-color);
+  box-shadow: 0 0 15px rgba(238, 93, 80, 0.8);
+  color: #fff;
+  animation: failedCoin 1s ease-in-out;
+}
+
+@keyframes successCoin {
+  0% {
+    transform: translate3d(-50%, 0, 0) scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: translate3d(-50%, 0, 0) scale(1.5);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: translate3d(-50%, 0, 0) scale(3);
+    opacity: 0;
+  }
+}
+
+@keyframes failedCoin {
+
+  0%,
+  100% {
+    transform: translate3d(-50%, 0, 0) scale(1);
+  }
+
+  25%,
+  75% {
+    transform: translate3d(-50%, 0, 0) scale(1) rotateZ(-5deg);
+  }
+
+  50% {
+    transform: translate3d(-50%, 0, 0) scale(1) rotateZ(5deg);
+  }
+}
+
+@keyframes authCoinFloat {
+  0% {
+    transform: translate3d(-50%, 0, 0) rotateY(0deg);
+  }
+
+  100% {
+    transform: translate3d(-50%, 0, 0) rotateY(360deg);
+  }
+}
+
+/* Role-based enhanced coin styles */
+.coin-supervisor {
+  background: linear-gradient(135deg, #111 0%, #222 100%);
+  border: 3px solid #ffaa00;
+  color: #ffaa00;
+  box-shadow: 0 0 10px rgba(255, 170, 0, 0.3);
+}
+
+.coin-admin {
+  background: linear-gradient(135deg, #111 0%, #222 100%);
+  border: 3px solid #00aaff;
+  color: #00aaff;
+  box-shadow: 0 0 10px rgba(0, 170, 255, 0.3);
+}
+
+.coin-superadmin {
+  background: linear-gradient(135deg, #111 0%, #222 100%);
+  border: 3px solid var(--cyber-primary);
+  color: var(--cyber-primary);
+  box-shadow: 0 0 10px rgba(0, 85, 255, 0.5);
+}
+
+.auth-coin-icon {
+  font-size: 20px;
+  margin-bottom: 2px;
+  text-shadow: 0 0 5px currentColor;
+  display: none;
+  /* Hide old icon just in case */
+}
+
+.auth-coin-icon-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  z-index: 0;
+}
+
+.coin-text {
+  position: relative;
+  z-index: 1;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1.1;
+  white-space: pre-line;
+  text-shadow: 0 0 4px #000;
+  /* Added shadow to make text readable over image */
+}
+
+.auth-coin-text {
+  font-size: 8px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* Enhanced Success Message */
+.success-message {
+  position: absolute;
+  bottom: -100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, var(--success-color), #00ff88);
+  color: #000;
+  padding: 12px 24px;
+  border-radius: 8px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: all 0.5s ease;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  box-shadow: 0 4px 15px rgba(5, 205, 153, 0.4);
+  z-index: 30;
+  will-change: transform, opacity, bottom;
+}
+
+.success-message.show {
+  opacity: 1;
+  bottom: -60px;
+}
+
+/* Error Message */
+.error-message {
+  background: rgba(238, 93, 80, 0.1);
+  border: 1px solid var(--error-color);
+  color: var(--error-color);
+  padding: 12px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 20px;
+  font-weight: 600;
+  text-align: center;
+  /* backdrop-filter: blur(10px); REMOVED for performance */
+  box-shadow: 0 2px 10px rgba(238, 93, 80, 0.1);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .glass-wrapper {
+    flex-direction: column;
+    height: auto;
+    width: 100%;
+    max-width: 450px;
+  }
+
+  .visual-section {
+    height: 250px;
+    order: -1;
+  }
+
+  .login-section {
+    padding: 30px;
+  }
+
+  .login-title {
+    font-size: 24px;
+  }
+
+  .scene-container {
+    transform: scale(0.6);
+  }
+
+  .auth-coin {
+    width: 90px;
+    height: 90px;
+    top: -80px;
+  }
+
+  .auth-coin::before {
+    width: 100px;
+    height: 100px;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-section {
+    padding: 20px;
+  }
+
+  .login-title {
+    font-size: 20px;
+  }
+
+  .form-input {
+    font-size: 14px;
+  }
+
+  .login-button {
+    font-size: 14px;
+    padding: 12px;
+  }
+
+  .scene-container {
+    transform: scale(0.5);
+  }
+
+  .auth-coin {
+    width: 80px;
+    height: 80px;
+    top: -70px;
+  }
+
+  .auth-coin::before {
+    width: 80px;
+    height: 80px;
+  }
+}

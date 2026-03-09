@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .stream-container {
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            background: #2a2a2a;
+        }
+        .stream-image {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+            background: #333;
+        }
+        .log {
+            background: #000;
+            color: #0f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            height: 200px;
+            overflow-y: auto;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Camera Stream Test</h1>
+        
+        <div class="stream-container">
+            <h3>Demo Stream Test</h3>
+            <img id="streamImage" class="stream-image" alt="Camera Stream" style="display: none;">
+            <div class="status" id="status">Ready to test</div>
+            
+            <div class="controls">
+                <button onclick="startStream()">Start Stream</button>
+                <button onclick="stopStream()">Stop Stream</button>
+                <button onclick="testSingleFrame()">Test Single Frame</button>
+                <button onclick="clearLog()">Clear Log</button>
+            </div>
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let streamInterval = null;
+        let frameCount = 0;
+        
+        function log(message) {
+            const logElement = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logElement.innerHTML += `[${timestamp}] ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+        
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+            log(`STATUS: ${message}`);
+        }
+        
+        function testSingleFrame() {
+            log('Testing single frame...');
+            updateStatus('Loading single frame...');
+            
+            const img = document.getElementById('streamImage');
+            const frameUrl = `http://192.168.1.209:8005/api/collections/cameras/1/frame?t=${Date.now()}`;
+            
+            img.onload = function() {
+                log(`✓ Single frame loaded successfully (${frameUrl})`);
+                updateStatus('Single frame loaded successfully');
+                img.style.display = 'block';
+            };
+            
+            img.onerror = function(e) {
+                log(`✗ Failed to load single frame: ${e.message || 'Unknown error'}`);
+                updateStatus('Failed to load single frame');
+            };
+            
+            img.src = frameUrl;
+        }
+        
+        function startStream() {
+            if (streamInterval) {
+                log('Stream already running');
+                return;
+            }
+            
+            log('Starting stream...');
+            updateStatus('Starting stream...');
+            frameCount = 0;
+            
+            // Start the backend stream first
+            fetch('http://192.168.1.209:8005/api/collections/cameras/1/start-stream', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                log(`✓ Backend stream started: ${JSON.stringify(data)}`);
+                
+                // Now start fetching frames
+                const img = document.getElementById('streamImage');
+                img.style.display = 'block';
+                
+                const updateFrame = () => {
+                    const frameUrl = `http://192.168.1.209:8005/api/collections/cameras/1/frame?t=${Date.now()}`;
+                    
+                    // Create a new image to test loading
+                    const testImg = new Image();
+                    
+                    testImg.onload = function() {
+                        img.src = frameUrl;
+                        frameCount++;
+                        if (frameCount % 10 === 0) {
+                            log(`✓ Frame ${frameCount} loaded`);
+                        }
+                        updateStatus(`Streaming... Frame ${frameCount}`);
+                    };
+                    
+                    testImg.onerror = function(e) {
+                        log(`✗ Frame ${frameCount + 1} failed to load`);
+                        updateStatus(`Frame error at ${frameCount + 1}`);
+                    };
+                    
+                    testImg.src = frameUrl;
+                };
+                
+                // Update immediately
+                updateFrame();
+                
+                // Then update every 200ms
+                streamInterval = setInterval(updateFrame, 200);
+                log('✓ Frame streaming started (5 FPS)');
+            })
+            .catch(error => {
+                log(`✗ Failed to start backend stream: ${error.message}`);
+                updateStatus('Failed to start backend stream');
+            });
+        }
+        
+        function stopStream() {
+            if (streamInterval) {
+                clearInterval(streamInterval);
+                streamInterval = null;
+                log('✓ Frame streaming stopped');
+            }
+            
+            // Stop the backend stream
+            fetch('http://192.168.1.209:8005/api/collections/cameras/1/stop-stream', {
+                method: 'DELETE'
+            })
+            .then(response => {
+                if (response.ok) {
+                    log('✓ Backend stream stopped');
+                } else {
+                    log(`⚠ Backend stream stop returned: ${response.status}`);
+                }
+            })
+            .catch(error => {
+                log(`✗ Failed to stop backend stream: ${error.message}`);
+            });
+            
+            updateStatus('Stream stopped');
+            document.getElementById('streamImage').style.display = 'none';
+        }
+        
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+        
+        // Initial log
+        log('Stream test page loaded');
+        log('Backend URL: http://192.168.1.209:8005');
+        log('Frame endpoint: /api/collections/cameras/1/frame');
+    </script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+[
+  {
+    "id": 1,
+    "name": "Reception Area",
+    "rtsp_url": "rtsp://admin:Admin@123@192.168.4.243",
+    "collection_id": "default",
+    "collection_name": "Eagle Tower",
+    "ip_address": "192.168.4.243",
+    "location": "Eagle Tower",
+    "status": "inactive",
+    "created_at": "2025-07-31 10:49:38.890043",
+    "last_seen": "2026-02-12 11:41:49.371176",
+    "error_count": 0,
+    "is_active": false
+  },
+  {
+    "id": 2,
+    "name": "Eagle outer area",
+    "rtsp_url": "rtsp://admin:Admin@123@192.168.4.242",
+    "collection_id": "default",
+    "collection_name": "Eagle Tower",
+    "ip_address": "192.168.4.242",
+    "location": "Eagle Tower",
+    "status": "inactive",
+    "created_at": "2025-09-20 12:01:37.386403",
+    "last_seen": "2026-02-18 16:23:13.480722",
+    "error_count": 0,
+    "is_active": false
+  },
+  {
+    "id": 3,
+    "name": "Lift Area",
+    "rtsp_url": "rtsp://admin:Admin@123@192.168.4.244",
+    "collection_id": "default",
+    "collection_name": "Eagle Tower",
+    "ip_address": "192.168.4.244",
+    "location": "Eagle Tower",
+    "status": "active",
+    "created_at": "2025-09-20 12:05:52.267585",
+    "last_seen": "2026-02-27 16:03:32.923511",
+    "error_count": 0,
+    "is_active": true
+  },
+  {
+    "id": 6,
+    "name": "WEBCAM1",
+    "rtsp_url": "0",
+    "collection_id": "default",
+    "collection_name": "Eagle Tower",
+    "ip_address": "0",
+    "location": "EAGLE",
+    "status": "inactive",
+    "created_at": "2025-11-07 11:45:06.182602",
+    "last_seen": "2025-11-17 14:02:39.863703",
+    "error_count": 0,
+    "is_active": false
+  },
+  {
+    "id": 7,
+    "name": "web",
+    "rtsp_url": "1",
+    "collection_id": "default",
+    "collection_name": "Default Collection",
+    "ip_address": "1",
+    "location": "ground",
+    "status": "inactive",
+    "created_at": "2025-11-17 14:09:14.720911",
+    "last_seen": "2025-11-17 16:59:15.101242",
+    "error_count": 0,
+    "is_active": false
+  }
+]

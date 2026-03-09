@@ -1,0 +1,286 @@
+.video-cell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  background: #2d3748; /* Dark gray/slate background */
+  border: 1px solid #4a5568; /* Light border */
+  border-radius: 12px; /* Rounded corners */
+  overflow: hidden;
+  cursor: move;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+}
+
+.video-cell.highlighted {
+  border: 2px solid #4CAF50;
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3), 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.video-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a202c; /* Slightly darker background for the video area */
+  position: relative;
+}
+
+.placeholder-content {
+  text-align: center;
+  color: #a0aec0; /* Lighter text color for better visibility */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.camera-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+  color: #a0aec0;
+}
+
+.camera-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.7); /* Semi-transparent black background */
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 500;
+  z-index: 5;
+  text-align: left;
+}
+
+/* Camera Controls */
+.camera-controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+}
+
+.video-cell:hover .camera-controls {
+  opacity: 1;
+}
+
+.camera-control-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.camera-control-button:hover {
+  transform: scale(1.1);
+}
+
+.edit-button:hover {
+  background: rgba(33, 150, 243, 0.9);
+}
+
+.delete-button:hover {
+  background: rgba(244, 67, 54, 0.9);
+}
+
+/* Camera Edit Form */
+.camera-edit-form {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  border-radius: 12px;
+}
+
+.camera-edit-form form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-group label {
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.form-group input {
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: rgba(255, 255, 255, 0.1);
+  color: #000000;
+  font-size: 0.9rem;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #2196F3;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.save-button,
+.cancel-button {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.save-button {
+  background: #2196F3;
+  color: white;
+}
+
+.save-button:hover {
+  background: #1976D2;
+}
+
+.cancel-button {
+  background: #666;
+  color: white;
+}
+
+.cancel-button:hover {
+  background: #555;
+}
+
+/* Delete Confirmation Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #2a2a2a;
+  padding: 20px;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 400px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.modal-content h3 {
+  color: #fff;
+  margin: 0 0 15px 0;
+}
+
+.modal-content p {
+  color: #ccc;
+  margin: 0 0 20px 0;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.confirm-button {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  background: #f44336;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.confirm-button:hover {
+  background: #d32f2f;
+}
+
+/* Error Message */
+.error-message {
+  color: #f44336;
+  background: rgba(244, 67, 54, 0.1);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  margin-bottom: 10px;
+}
+
+.bookmark-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s;
+  position: relative;
+}
+
+.bookmark-button:hover {
+  transform: scale(1.1);
+}
+
+.bookmark-button img {
+  filter: brightness(0) invert(1);
+  transition: filter 0.2s;
+}
+
+.bookmark-button.bookmarked img {
+  filter: brightness(0) invert(1) sepia(1) saturate(3000%) hue-rotate(0deg);
+}
+
+.bookmark-button::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 215, 0, 0.1);
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.bookmark-button.bookmarked::after {
+  opacity: 1;
+} 

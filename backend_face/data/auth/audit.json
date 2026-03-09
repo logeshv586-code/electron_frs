@@ -1,0 +1,132 @@
+[
+  {
+    "id": "f4aa6fac-935c-4837-acd1-18b7cff71864",
+    "actor_id": null,
+    "action": "BOOTSTRAP_SUPERADMIN",
+    "target": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "timestamp": "2026-02-04T09:24:51.676783+00:00",
+    "meta": {
+      "username": "eagleai"
+    }
+  },
+  {
+    "id": "7d3db4d0-0f02-4b0d-bcaa-6674218e286e",
+    "actor_id": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "action": "CREATE_USER",
+    "target": "4593d734-b9a8-4d3e-9970-bc4da3eae160",
+    "timestamp": "2026-02-04T09:52:18.035797+00:00",
+    "meta": {
+      "role": "Admin",
+      "username": "admin1"
+    }
+  },
+  {
+    "id": "0b2f1696-4ba9-466f-829c-4918e5fecf11",
+    "actor_id": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "action": "DELETE_USER",
+    "target": "4593d734-b9a8-4d3e-9970-bc4da3eae160",
+    "timestamp": "2026-02-04T09:53:20.037056+00:00",
+    "meta": {
+      "role": "Admin"
+    }
+  },
+  {
+    "id": "dd4325c5-626e-4ca9-9e8d-7d91c6eab908",
+    "actor_id": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "action": "CREATE_USER",
+    "target": "a1c8aeda-42f8-47ba-b1ef-84eaf07a3f04",
+    "timestamp": "2026-02-04T09:53:48.536862+00:00",
+    "meta": {
+      "role": "Admin",
+      "username": "admin1"
+    }
+  },
+  {
+    "id": "8e58adc9-fdec-42ca-b847-34e68c600a7c",
+    "actor_id": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "action": "DELETE_USER",
+    "target": "a1c8aeda-42f8-47ba-b1ef-84eaf07a3f04",
+    "timestamp": "2026-02-04T09:55:44.709559+00:00",
+    "meta": {
+      "role": "Admin"
+    }
+  },
+  {
+    "id": "c2bffb92-880a-4f39-a2d3-f101cf33ef5d",
+    "actor_id": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "action": "CREATE_USER",
+    "target": "460d5391-3213-48a1-a261-5cd81e4f578c",
+    "timestamp": "2026-02-04T09:56:05.989962+00:00",
+    "meta": {
+      "role": "Admin",
+      "username": "admin1"
+    }
+  },
+  {
+    "id": "fa7957a1-244c-4d89-8d14-be15d16d14e9",
+    "actor_id": "6cab4d01-d479-4b83-ac36-de738d009b93",
+    "action": "ASSIGN_CAMERAS_TO_ADMIN",
+    "target": "460d5391-3213-48a1-a261-5cd81e4f578c",
+    "timestamp": "2026-02-04T10:45:26.345005+00:00",
+    "meta": {
+      "camera_ids": [
+        1,
+        2,
+        3
+      ],
+      "assigned_count": 3
+    }
+  },
+  {
+    "id": "5827d458-d378-48cc-bdee-7ed04af6f11e",
+    "actor_id": "460d5391-3213-48a1-a261-5cd81e4f578c",
+    "action": "CREATE_USER",
+    "target": "c9a76c24-011d-4a7c-ab51-c5f69182ab9f",
+    "timestamp": "2026-02-04T10:47:18.211871+00:00",
+    "meta": {
+      "role": "Supervisor",
+      "username": "super1"
+    }
+  },
+  {
+    "id": "7ed1bedc-61f3-408a-abd3-96f71375b1de",
+    "actor_id": "460d5391-3213-48a1-a261-5cd81e4f578c",
+    "action": "ASSIGN_CAMERAS",
+    "target": "c9a76c24-011d-4a7c-ab51-c5f69182ab9f",
+    "timestamp": "2026-02-04T10:47:38.886108+00:00",
+    "meta": {
+      "camera_ids": [
+        1,
+        2,
+        3
+      ],
+      "assigned_count": 3
+    }
+  },
+  {
+    "id": "e8b6becc-b231-4bca-9896-860bdc7cb607",
+    "actor_id": "460d5391-3213-48a1-a261-5cd81e4f578c",
+    "action": "UPDATE_USER",
+    "target": "c9a76c24-011d-4a7c-ab51-c5f69182ab9f",
+    "timestamp": "2026-02-04T10:48:57.045634+00:00",
+    "meta": {
+      "updated_fields": [
+        "camera_limit",
+        "menus"
+      ]
+    }
+  },
+  {
+    "id": "69db45e0-0b36-4f3d-9173-d85f24ee2a26",
+    "actor_id": "460d5391-3213-48a1-a261-5cd81e4f578c",
+    "action": "UPDATE_USER",
+    "target": "c9a76c24-011d-4a7c-ab51-c5f69182ab9f",
+    "timestamp": "2026-02-04T10:54:15.644009+00:00",
+    "meta": {
+      "updated_fields": [
+        "camera_limit",
+        "menus"
+      ]
+    }
+  }
+]

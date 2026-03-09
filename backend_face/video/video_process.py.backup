@@ -1,0 +1,596 @@
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, APIRouter
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import face_recognition
+import logging
+import os
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+import cv2
+import numpy as np
+import json
+import uuid
+import asyncio
+import tempfile
+from pathlib import Path
+import base64
+import shutil
+from ultralytics import YOLO
+import torch
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, 
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Define storage paths
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+VIDEO_DIR = os.path.join(DATA_DIR, "videos")
+VIDEO_MATCHES_DIR = os.path.join(DATA_DIR, "video_matches")
+
+# Create necessary directories
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(VIDEO_DIR, exist_ok=True)
+os.makedirs(VIDEO_MATCHES_DIR, exist_ok=True)
+
+# Try to load YOLO model
+try:
+    # Try different possible locations for YOLO models
+    possible_paths = [
+        os.path.join(BASE_DIR, "yolov8n-face.pt"),  # Face-specific model in root
+        os.path.join(BASE_DIR, "backend_face", "yolov8n-face.pt"),  # Face-specific in backend_face
+        os.path.join(BASE_DIR, "yolov11n-face.pt"),  # Alternative face models
+        os.path.join(BASE_DIR, "yolov11l-face.pt"),
+        os.path.join(BASE_DIR, "backend_face", "yolov8n.pt"),  # General YOLO in backend_face
+        os.path.join(BASE_DIR, "yolov8n.pt")  # General YOLO in root
+    ]
+
+    model_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            model_path = path
+            logger.info(f"Found YOLO model at: {model_path}")
+            break
+
+    if model_path is None:
+        logger.warning(f"No YOLO model found in any of these locations:")
+        for path in possible_paths:
+            logger.warning(f"  - {path}")
+        logger.warning("Will use face_recognition library only")
+
+    if model_path and os.path.exists(model_path):
+        YOLO_MODEL = YOLO(model_path)
+        # Check if this is a general YOLO model (not face-specific)
+        if "yolov8n.pt" in model_path and "face" not in model_path:
+            logger.warning("Using general YOLO model - will prioritize face_recognition library")
+            USE_FACE_RECOGNITION_FALLBACK = True
+        else:
+            logger.info("Using face-specific YOLO model")
+            USE_FACE_RECOGNITION_FALLBACK = False
+        logger.info(f"YOLO model loaded successfully from: {model_path}")
+    else:
+        logger.info("No YOLO model found - using face_recognition library only")
+        YOLO_MODEL = None
+        USE_FACE_RECOGNITION_FALLBACK = True
+except Exception as e:
+    logger.error(f"Error loading YOLO model: {e}")
+    YOLO_MODEL = None
+    USE_FACE_RECOGNITION_FALLBACK = True
+
+# Check for GPU availability
+GPU_AVAILABLE = torch.cuda.is_available() if torch.__name__ == "torch" else False
+if GPU_AVAILABLE:
+    logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    torch.cuda.set_device(0)
+else:
+    logger.info("No GPU available. Using CPU.")
+
+# Models
+class VideoUploadResponse(BaseModel):
+    video_id: str
+    filename: str
+    status: str
+
+class ProcessingStatus(BaseModel):
+    task_id: str
+    status: str
+    progress: float
+    message: str
+    matches: Optional[List[Dict]] = None
+
+class VideoMatch(BaseModel):
+    name: str
+    frame_number: int
+    confidence: float
+    details: dict
+    face_image: str  # Base64 encoded image
+    timestamp: str
+
+class ProcessingResult(BaseModel):
+    video_id: str
+    total_frames: int
+    processed_frames: int
+    matches: List[Dict[str, Any]]
+    processing_time: float
+    person_tracking: Dict[str, Dict[str, Any]]
+
+# Store processing tasks
+processing_tasks = {}
+
+class VideoProcessor:
+    def __init__(self):
+        self.known_faces = {"encodings": [], "names": [], "confidence_threshold": 0.6}
+        self.person_details = {}
+        self.load_known_faces()
+        self.load_person_details()
+
+    def load_known_faces(self):
+        """Load known faces from data directory with improved error handling"""
+        try:
+            if not os.path.exists(DATA_DIR):
+                os.makedirs(DATA_DIR)
+                logger.warning(f"Created data directory at: {DATA_DIR}")
+                return
+
+            known_face_encodings = []
+            known_face_names = []
+
+            # List all person directories
+            person_dirs = [d for d in os.listdir(DATA_DIR) 
+                         if os.path.isdir(os.path.join(DATA_DIR, d))]
+
+            logger.info(f"Found {len(person_dirs)} person directories")
+
+            for person_name in person_dirs:
+                person_folder = os.path.join(DATA_DIR, person_name)
+                image_files = [f for f in os.listdir(person_folder) 
+                             if f.lower().endswith(('jpg', 'jpeg', 'png'))]
+
+                logger.info(f"Processing {len(image_files)} images for {person_name}")
+
+                for image_file in image_files:
+                    try:
+                        image_path = os.path.join(person_folder, image_file)
+                        image = face_recognition.load_image_file(image_path)
+
+                        # Detect faces in image
+                        face_locations = face_recognition.face_locations(image)
+                        if not face_locations:
+                            logger.warning(f"No face found in {image_file}")
+                            continue
+
+                        # Get face encodings
+                        face_encodings = face_recognition.face_encodings(image, face_locations)
+                        if not face_encodings:
+                            logger.warning(f"Could not encode face in {image_file}")
+                            continue
+
+                        # Add all detected faces
+                        for encoding in face_encodings:
+                            known_face_encodings.append(encoding)
+                            known_face_names.append(person_name)
+
+                    except Exception as e:
+                        logger.error(f"Error processing {image_file}: {e}")
+                        continue
+
+            self.known_faces = {
+                "encodings": known_face_encodings,
+                "names": known_face_names
+            }
+
+            logger.info(f"Successfully loaded {len(known_face_names)} face encodings")
+
+        except Exception as e:
+            logger.error(f"Error loading known faces: {e}")
+            self.known_faces = {"encodings": [], "names": []}
+
+    def load_person_details(self):
+        """Load person details from data directory"""
+        try:
+            for person_name in os.listdir(DATA_DIR):
+                person_path = os.path.join(DATA_DIR, person_name)
+                if os.path.isdir(person_path):
+                    # Look for a details.json file
+                    details_file = os.path.join(person_path, "details.json")
+                    if os.path.exists(details_file):
+                        with open(details_file, 'r') as f:
+                            self.person_details[person_name] = json.load(f)
+                    else:
+                        # Create basic details from directory name
+                        self.person_details[person_name] = {
+                            "name": person_name,
+                            "id": str(uuid.uuid4()),
+                            "registered": datetime.now().isoformat()
+                        }
+            
+            logger.info(f"Loaded details for {len(self.person_details)} persons")
+        except Exception as e:
+            logger.error(f"Error loading person details: {e}")
+
+    async def process_video(self, video_path: str, task_id: str):
+        """Process video and detect faces with improved recognition"""
+        cap = None
+        person_tracking = {}
+        
+        try:
+            processing_tasks[task_id] = {
+                'status': 'processing',
+                'progress': 0,
+                'message': 'Starting video processing',
+                'matches': []
+            }
+            
+            # Open video
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise Exception(f"Failed to open video")
+            
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            
+            # Results storage
+            results = {
+                "task_id": task_id,
+                "processed_frames": 0,
+                "total_frames": total_frames,
+                "fps": fps,
+                "matches": [],
+                "person_tracking": {},
+                "person_appearances": {}
+            }
+            
+            # Process frames
+            frame_count = 0
+            last_progress_update = 0
+            current_appearances = {}  # Track current appearance intervals
+            start_time = datetime.now()
+            
+            while True:
+                # Check if task is cancelled
+                if task_id in processing_tasks and processing_tasks[task_id].get('status') == "cancelled":
+                    cap.release()
+                    return
+                    
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                    
+                frame_count += 1
+                frame_time = frame_count / fps  # Time in seconds
+                
+                # Skip frames for faster processing
+                if frame_count % 10 != 0:  # Process every 10th frame
+                    continue
+                
+                # Update progress
+                if frame_count - last_progress_update >= 10:
+                    progress = min(100, (frame_count / total_frames) * 100)
+                    processing_tasks[task_id]["progress"] = progress
+                    processing_tasks[task_id]["message"] = f"Processing frame {frame_count}/{total_frames}"
+                    last_progress_update = frame_count
+                
+                # Detect faces using improved detection pipeline
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                face_locations = []
+
+                # Use face_recognition as primary method for better accuracy
+                if USE_FACE_RECOGNITION_FALLBACK or YOLO_MODEL is None:
+                    # Use face_recognition library for more accurate face detection
+                    try:
+                        face_locations = face_recognition.face_locations(rgb_frame, model="hog")
+                        logger.debug(f"Frame {frame_count}: face_recognition detected {len(face_locations)} faces")
+                    except Exception as e:
+                        logger.error(f"Error with face_recognition: {e}")
+                        face_locations = []
+
+                # If face_recognition didn't find faces and we have YOLO, try YOLO as backup
+                if not face_locations and YOLO_MODEL is not None:
+                    try:
+                        # Detect faces using YOLO (for general object detection)
+                        results_yolo = YOLO_MODEL(rgb_frame, conf=0.3)
+
+                        for result in results_yolo:
+                            if hasattr(result, 'boxes') and result.boxes is not None:
+                                boxes = result.boxes.cpu().numpy()
+                                for box in boxes:
+                                    # For general YOLO, look for person class (class 0)
+                                    if hasattr(box, 'cls') and int(box.cls[0]) == 0:  # Person class
+                                        if box.conf[0] > 0.3:
+                                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                                            # Convert person detection to face region (upper portion)
+                                            height = y2 - y1
+                                            face_y1 = y1
+                                            face_y2 = y1 + int(height * 0.3)  # Top 30% for face
+                                            face_locations.append((face_y1, x2, face_y2, x1))
+                        logger.debug(f"Frame {frame_count}: YOLO detected {len(face_locations)} person regions")
+                    except Exception as e:
+                        logger.error(f"Error with YOLO detection: {e}")
+                        face_locations = []
+                
+                # Process detected faces
+                if face_locations:
+                    logger.debug(f"Frame {frame_count}: Found {len(face_locations)} face locations")
+                    # Get face encodings for detected faces
+                    face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                    logger.debug(f"Frame {frame_count}: Generated {len(face_encodings)} face encodings")
+                    
+                    # Track detected names in this frame
+                    detected_names = set()
+                    
+                    for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+                        name = "Unknown"
+                        confidence = 0.0
+                        
+                        if len(self.known_faces["encodings"]) > 0:
+                            # Compare with known faces
+                            matches = face_recognition.compare_faces(
+                                self.known_faces["encodings"],
+                                face_encoding,
+                                tolerance=0.6
+                            )
+                            
+                            if True in matches:
+                                face_distances = face_recognition.face_distance(
+                                    self.known_faces["encodings"],
+                                    face_encoding
+                                )
+                                best_match_index = np.argmin(face_distances)
+                                if matches[best_match_index]:
+                                    confidence = (1 - face_distances[best_match_index]) * 100
+                                    if confidence > 60:  # Only accept high confidence matches
+                                        name = self.known_faces["names"][best_match_index]
+                                        detected_names.add(name)
+                                        logger.info(f"Frame {frame_count}: Recognized {name} with {confidence:.1f}% confidence")
+                                        
+                                        # Track appearance intervals
+                                        if name not in current_appearances:
+                                            # Start new appearance interval
+                                            current_appearances[name] = {
+                                                "start": frame_time,
+                                                "confidence": confidence
+                                            }
+                                        else:
+                                            # Update last seen time
+                                            current_appearances[name]["last_seen"] = frame_time
+                                            current_appearances[name]["confidence"] = max(
+                                                current_appearances[name]["confidence"],
+                                                confidence
+                                            )
+                        
+                        if confidence > 60:  # Only store high confidence detections
+                            # Extract face image with margin
+                            margin = 0.2  # 20% margin
+                            height = bottom - top
+                            width = right - left
+                            
+                            # Calculate expanded face region
+                            exp_top = max(0, int(top - height * margin))
+                            exp_bottom = min(rgb_frame.shape[0], int(bottom + height * margin))
+                            exp_left = max(0, int(left - width * margin))
+                            exp_right = min(rgb_frame.shape[1], int(right + width * margin))
+                            
+                            # Extract and encode face image
+                            face_img = frame[exp_top:exp_bottom, exp_left:exp_right]
+                            _, img_encoded = cv2.imencode('.jpg', face_img)
+                            img_base64 = base64.b64encode(img_encoded.tobytes()).decode('utf-8')
+                            
+                            # Create match record
+                            match = {
+                                "name": name,
+                                "frame_number": frame_count,
+                                "confidence": float(confidence),
+                                "details": self.person_details.get(name, {}),
+                                "face_image": img_base64,
+                                "timestamp": datetime.now().isoformat(),
+                                "bbox": [exp_top, exp_right, exp_bottom, exp_left]
+                            }
+                            
+                            results["matches"].append(match)
+                            processing_tasks[task_id]["matches"] = results["matches"]
+                
+                # Check for ended appearances (persons no longer in frame)
+                for name in list(current_appearances.keys()):
+                    if name not in detected_names:
+                        # Person has disappeared
+                        appearance = current_appearances.pop(name)
+                        if name not in results["person_appearances"]:
+                            results["person_appearances"][name] = []
+                        
+                        # Add the appearance interval
+                        results["person_appearances"][name].append({
+                            "start_time": appearance["start"],
+                            "end_time": appearance.get("last_seen", appearance["start"]),
+                            "confidence": appearance["confidence"]
+                        })
+                
+                # Allow other tasks to run
+                await asyncio.sleep(0)
+            
+            # Handle any remaining appearances at end of video
+            for name, appearance in current_appearances.items():
+                if name not in results["person_appearances"]:
+                    results["person_appearances"][name] = []
+                results["person_appearances"][name].append({
+                    "start_time": appearance["start"],
+                    "end_time": appearance.get("last_seen", appearance["start"]),
+                    "confidence": appearance["confidence"]
+                })
+            
+            # Calculate total duration for each person
+            for name in results["person_appearances"]:
+                total_duration = sum(
+                    app["end_time"] - app["start_time"]
+                    for app in results["person_appearances"][name]
+                )
+                if name not in results["person_tracking"]:
+                    results["person_tracking"][name] = {}
+                results["person_tracking"][name]["total_duration"] = total_duration
+                results["person_tracking"][name]["appearances"] = results["person_appearances"][name]
+            
+            # Calculate processing time
+            processing_time = (datetime.now() - start_time).total_seconds()
+            results["processing_time"] = processing_time
+            
+            # Final status update
+            processing_tasks[task_id].update({
+                'status': 'completed',
+                'progress': 100,
+                'message': 'Processing completed successfully',
+                'result': results
+            })
+            
+        except Exception as e:
+            logger.error(f"Error processing video: {e}")
+            processing_tasks[task_id].update({
+                'status': 'failed',
+                'message': str(e)
+            })
+        finally:
+            if cap is not None:
+                cap.release()
+
+# Initialize FastAPI router
+router = APIRouter(prefix="/api/video")
+video_processor = VideoProcessor()
+
+@router.post("/upload", response_model=VideoUploadResponse)
+async def upload_video(video: UploadFile = File(...)):
+    """Upload a video file for processing"""
+    try:
+        video_id = str(uuid.uuid4())
+        filename = f"{video_id}_{video.filename}"
+        file_path = os.path.join(VIDEO_DIR, filename)
+
+        # Save uploaded video
+        with open(file_path, "wb") as f:
+            content = await video.read()
+            f.write(content)
+
+        return VideoUploadResponse(
+            video_id=video_id,
+            filename=filename,
+            status="uploaded"
+        )
+    except Exception as e:
+        logger.error(f"Error uploading video: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{video_id}/process")
+async def process_video(video_id: str, background_tasks: BackgroundTasks):
+    """Start video processing"""
+    try:
+        video_path = None
+        for file in os.listdir(VIDEO_DIR):
+            if file.startswith(video_id):
+                video_path = os.path.join(VIDEO_DIR, file)
+                break
+
+        if not video_path:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        task_id = str(uuid.uuid4())
+        processing_tasks[task_id] = {
+            'status': 'queued',
+            'progress': 0,
+            'message': 'Queued for processing',
+            'matches': []
+        }
+
+        # Start processing in background
+        background_tasks.add_task(video_processor.process_video, video_path, task_id)
+
+        return {"task_id": task_id, "status": "processing_started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting video processing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/task/{task_id}", response_model=ProcessingStatus)
+async def get_processing_status(task_id: str):
+    """Get video processing status"""
+    if task_id not in processing_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task_info = processing_tasks[task_id]
+    return ProcessingStatus(
+        task_id=task_id,
+        status=task_info['status'],
+        progress=task_info['progress'],
+        message=task_info['message'],
+        matches=task_info.get('matches')
+    )
+
+@router.get("/task/{task_id}/result")
+async def get_task_result(task_id: str):
+    """Get the complete result of a processing task"""
+    if task_id not in processing_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    task = processing_tasks[task_id]
+    if task["status"] != "completed":
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Task is not completed. Current status: {task['status']}"
+        )
+    
+    if "result" not in task:
+        raise HTTPException(status_code=404, detail="Results not found")
+        
+    return task["result"]
+
+@router.delete("/task/{task_id}")
+async def cancel_task(task_id: str):
+    """Cancel a processing task"""
+    if task_id not in processing_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task = processing_tasks[task_id]
+    if task["status"] in ["completed", "failed", "cancelled"]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot cancel task with status: {task['status']}"
+        )
+    
+    # Update task status
+    processing_tasks[task_id]["status"] = "cancelled"
+    processing_tasks[task_id]["message"] = "Task cancelled by user"
+    
+    return {
+        "status": "success",
+        "message": "Task cancelled",
+        "task_id": task_id
+    }
+
+@router.get("/formats")
+async def get_supported_formats():
+    """Get supported video formats"""
+    return {
+        "formats": [".mp4", ".avi", ".mkv", ".mov", ".wmv"],
+        "max_size": 1024 * 1024 * 100  # 100MB
+    }
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        # Check if YOLO model is loaded
+        model_status = "loaded" if YOLO_MODEL is not None else "not loaded"
+        gpu_status = "available" if GPU_AVAILABLE else "not available"
+        
+        return {
+            "status": "ok",
+            "timestamp": datetime.now().isoformat(),
+            "yolo_model": model_status,
+            "gpu": gpu_status,
+            "data_dir": os.path.exists(DATA_DIR),
+            "known_faces": len(video_processor.known_faces["names"])
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Health check failed: {str(e)}"
+        ) 

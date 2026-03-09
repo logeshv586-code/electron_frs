@@ -1,0 +1,180 @@
+.mjpeg-stream-player {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background-color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.mjpeg-stream-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.mjpeg-stream-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-primary);
+  background-color: var(--bg-panel);
+  gap: 0.5rem;
+  padding: 1rem;
+}
+
+.mjpeg-stream-loading span {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.mjpeg-stream-loading small {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.mjpeg-stream-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-primary);
+  background-color: var(--bg-panel);
+  padding: 1rem;
+}
+
+.error-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.error-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.25rem;
+  color: var(--danger-color);
+}
+
+.error-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.error-text div {
+  font-size: 0.875rem;
+  color: var(--danger-color);
+  font-weight: 500;
+}
+
+.error-text small {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.retry-button {
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.retry-button:hover {
+  background-color: var(--primary-hover);
+}
+
+.retry-button:disabled {
+  background-color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border-color);
+  border-top: 2px solid var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .mjpeg-stream-loading,
+  .mjpeg-stream-error {
+    gap: 0.25rem;
+    padding: 0.75rem;
+  }
+
+  .mjpeg-stream-loading span,
+  .error-text div {
+    font-size: 0.75rem;
+  }
+
+  .mjpeg-stream-loading small,
+  .error-text small {
+    font-size: 0.7rem;
+  }
+
+  .loading-spinner {
+    width: 20px;
+    height: 20px;
+  }
+
+  .retry-button {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.7rem;
+  }
+
+  .error-icon {
+    font-size: 1.25rem;
+  }
+}
+
+/* Animation for smooth transitions */
+.mjpeg-stream-img {
+  transition: opacity 0.3s ease-in-out;
+}
+
+.mjpeg-stream-loading,
+.mjpeg-stream-error {
+  transition: opacity 0.3s ease-in-out;
+}
+
+/* Stream quality indicators */
+.mjpeg-stream-player:hover .mjpeg-stream-img {
+  filter: brightness(1.05);
+}
+
+/* Loading state animation */
+.mjpeg-stream-loading .loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+/* Error state styling */
+.mjpeg-stream-error {
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.mjpeg-stream-error:hover {
+  border-color: rgba(239, 68, 68, 0.4);
+}

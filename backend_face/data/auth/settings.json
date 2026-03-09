@@ -1,0 +1,9 @@
+{
+  "default_supervisor_camera_limit": 5,
+  "max_camera_limit_per_supervisor": 50,
+  "admin_max_supervisor_camera_limit": 20,
+  "admin_can_set_supervisor_camera_limit": true,
+  "admin_can_configure_supervisor_menus": true,
+  "exclusive_camera_assignment": true,
+  "jwt_exp_minutes": 60
+}

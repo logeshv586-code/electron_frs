@@ -1,0 +1,7 @@
+filename,label,timestamp_iso,saved_path,confidence,source
+unknown_20251110_140201_399605.jpg,unknown,2025-11-10T14:02:01.400250,C:\python programs\electron_frs\backend_face\captured_faces/unknown/unknown_20251110_140201_399605.jpg,0.3136488627027386,stream
+unknown_20251110_140206_106822.jpg,unknown,2025-11-10T14:02:06.107221,C:\python programs\electron_frs\backend_face\captured_faces/unknown/unknown_20251110_140206_106822.jpg,0.39370330886310945,stream
+unknown_20251110_140211_332831.jpg,unknown,2025-11-10T14:02:11.333230,C:\python programs\electron_frs\backend_face\captured_faces/unknown/unknown_20251110_140211_332831.jpg,0.31498927720989955,stream
+unknown_20251110_140701_017553.jpg,unknown,2025-11-10T14:07:01.019496,C:\python programs\electron_frs\backend_face\captured_faces/unknown/unknown_20251110_140701_017553.jpg,0.2461974497837135,stream
+unknown_20251110_140705_962877.jpg,unknown,2025-11-10T14:07:05.963742,C:\python programs\electron_frs\backend_face\captured_faces/unknown/unknown_20251110_140705_962877.jpg,0.24442972686396858,stream
+unknown_20251110_140711_155393.jpg,unknown,2025-11-10T14:07:11.155951,C:\python programs\electron_frs\backend_face\captured_faces/unknown/unknown_20251110_140711_155393.jpg,0.23911368833427848,stream

@@ -16,6 +16,8 @@ import Settings from './components/admin/Settings';
 import MainLayout from './components/layout/MainLayout';
 import useAuthStore from './store/authStore';
 import { detectBackendUrl, API_BASE_URL } from './utils/apiConfig';
+import HolidayCalendar from './components/HolidayCalendar';
+import AttendanceReport from './components/Attendance/AttendanceReport';
 
 const AppContent = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -28,7 +30,7 @@ const AppContent = () => {
       try {
         const workingUrl = await detectBackendUrl();
         const currentUrl = localStorage.getItem('api_base_url');
-        
+
         // If we found a working URL
         if (workingUrl) {
           // If it's different from what we have saved (or we have nothing saved)
@@ -47,7 +49,7 @@ const AppContent = () => {
             window.location.reload();
             return;
           }
-          
+
           console.warn('No backend server detected.');
         }
       } catch (error) {
@@ -56,7 +58,7 @@ const AppContent = () => {
         setIsCheckingBackend(false);
       }
     };
-    
+
     checkBackend();
   }, []);
 
@@ -78,7 +80,7 @@ const AppContent = () => {
 
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard />;
+        return <Dashboard setActiveTab={setActiveTab} />;
       case 'gallery':
         return <FaceGallery />;
       case 'events':
@@ -101,6 +103,13 @@ const AppContent = () => {
         return <UserManagement />;
       case 'settings':
         return <Settings />;
+      case 'holiday-calendar':
+        return <HolidayCalendar />;
+      case 'attendance-report':
+      case 'day-report':
+      case 'week-report':
+      case 'month-report':
+        return <AttendanceReport reportType={activeTab} />;
       default:
         return <Dashboard />;
     }

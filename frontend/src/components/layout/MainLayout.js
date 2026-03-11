@@ -1,27 +1,35 @@
 import React from 'react';
 import useAuthStore from '../../store/authStore';
-import { 
-  LayoutDashboard, 
-  Users, 
-  Camera, 
-  Image, 
-  Bell, 
-  ScanFace, 
-  Video, 
+import {
+  LayoutDashboard,
+  Users,
+  Camera,
+  Image,
+  Bell,
+  ScanFace,
+  Video,
   MonitorPlay,
   LogOut,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Menu,
   Settings,
-  Palette
+  Palette,
+  CalendarDays,
+  CalendarCheck
 } from 'lucide-react';
 import './MainLayout.css';
 
 const MainLayout = ({ children, activeTab, onTabChange }) => {
   const { user, logout, isLicenseExpired } = useAuthStore();
   const [collapsed, setCollapsed] = React.useState(false);
-  
+  const [expandedTabs, setExpandedTabs] = React.useState({});
+
+  const toggleExpanded = (tabId) => {
+    setExpandedTabs(prev => ({ ...prev, [tabId]: !prev[tabId] }));
+  };
+
   const themes = [
     { id: 'default', label: 'Dark Enterprise', color: '#0b1120' },
     { id: 'light', label: 'Light Blue', color: '#ffffff' },
@@ -34,7 +42,7 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
     const saved = localStorage.getItem('theme');
     return themes.some(t => t.id === saved) ? saved : 'default';
   });
-  
+
   // Transition effect for theme changes
   React.useEffect(() => {
     document.body.style.transition = 'background-color 0.3s ease, color 0.3s ease';
@@ -56,14 +64,26 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
-    { id: 'registration', label: 'Registration', icon: <Users size={20} /> },
+    { id: 'registration', label: 'Employee List', icon: <Users size={20} /> },
+    {
+      id: 'attendance',
+      label: 'Attendance',
+      icon: <CalendarCheck size={20} />,
+      subItems: [
+        { id: 'attendance-report', label: 'Attendance Report' },
+        { id: 'day-report', label: 'Day Report' },
+        { id: 'week-report', label: 'Week Report' },
+        { id: 'month-report', label: 'Month Report' },
+      ]
+    },
+    { id: 'holiday-calendar', label: 'Holiday Calendar', icon: <CalendarDays size={20} /> },
     { id: 'gallery', label: 'Gallery', icon: <Image size={20} /> },
+    { id: 'users', label: 'User Management', icon: <Users size={20} /> },
     { id: 'events', label: 'Events', icon: <Bell size={20} /> },
     { id: 'matching', label: 'Face Matching', icon: <ScanFace size={20} /> },
     { id: 'video', label: 'Video Processing', icon: <Video size={20} /> },
     { id: 'camera', label: 'Camera Management', icon: <Camera size={20} /> },
     { id: 'stream-viewer', label: 'Stream Viewer', icon: <MonitorPlay size={20} /> },
-    { id: 'users', label: 'User Management', icon: <Users size={20} /> },
     { id: 'settings', label: 'Settings', icon: <Settings size={20} /> },
   ];
 
@@ -76,8 +96,8 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
       });
       return normalizedMenus.includes(tab.id);
     }
-    if (user?.role === 'SuperAdmin') return true;
-    if (user?.role === 'Admin') return ['dashboard', 'camera', 'users', 'settings'].includes(tab.id);
+    if (user?.role === 'SuperAdmin') return ['dashboard', 'users', 'settings'].includes(tab.id);
+    if (user?.role === 'Admin') return ['dashboard', 'registration', 'attendance', 'holiday-calendar', 'camera', 'settings', 'gallery', 'users'].includes(tab.id);
     return ['dashboard'].includes(tab.id);
   });
 
@@ -88,8 +108,8 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
           <div className="logo-container">
             {!collapsed && <span className="logo-text">frs</span>}
           </div>
-          <button 
-            className="collapse-btn" 
+          <button
+            className="collapse-btn"
             onClick={() => setCollapsed(!collapsed)}
             title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"}
           >
@@ -111,16 +131,45 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
 
         <nav className="sidebar-nav">
           {visibleTabs.map(tab => (
-            <button
-              key={tab.id}
-              className={`nav-item ${activeTab === tab.id ? 'active' : ''}`}
-              onClick={() => onTabChange(tab.id)}
-              title={collapsed ? tab.label : ''}
-            >
-              <span className="nav-icon">{tab.icon}</span>
-              {!collapsed && <span className="nav-label">{tab.label}</span>}
-              {activeTab === tab.id && !collapsed && <div className="active-indicator" />}
-            </button>
+            <div key={tab.id} className="nav-item-container">
+              <button
+                className={`nav-item ${activeTab === tab.id || (tab.subItems && tab.subItems.some(sub => sub.id === activeTab)) ? 'active' : ''}`}
+                onClick={() => {
+                  if (tab.subItems) {
+                    toggleExpanded(tab.id);
+                  } else {
+                    onTabChange(tab.id);
+                  }
+                }}
+                title={collapsed ? tab.label : ''}
+              >
+                <div className="nav-item-content">
+                  <span className="nav-icon">{tab.icon}</span>
+                  {!collapsed && <span className="nav-label">{tab.label}</span>}
+                </div>
+                {!collapsed && tab.subItems && (
+                  <span className="nav-chevron">
+                    <ChevronDown size={16} style={{ transform: expandedTabs[tab.id] ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+                  </span>
+                )}
+                {activeTab === tab.id && !collapsed && !tab.subItems && <div className="active-indicator" />}
+              </button>
+
+              {!collapsed && tab.subItems && expandedTabs[tab.id] && (
+                <div className="sub-nav">
+                  {tab.subItems.map(subItem => (
+                    <button
+                      key={subItem.id}
+                      className={`sub-nav-item ${activeTab === subItem.id ? 'active' : ''}`}
+                      onClick={() => onTabChange(subItem.id)}
+                    >
+                      <span className="sub-nav-indicator"></span>
+                      <span className="nav-label">{subItem.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </nav>
 
@@ -144,14 +193,14 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
           </div>
           <div className="header-right">
             <div className="theme-switcher-container">
-              <button 
+              <button
                 className="theme-toggle-btn"
                 onClick={() => setShowThemeMenu(!showThemeMenu)}
                 title="Change Theme"
               >
                 <Palette size={20} />
               </button>
-              
+
               {showThemeMenu && (
                 <div className="theme-menu">
                   <div className="theme-menu-header">Select Theme</div>
@@ -179,13 +228,13 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
             </div>
           </div>
         </header>
-        
+
         {user?.role === 'Admin' && isLicenseExpired() && (
           <div style={{ padding: '12px 16px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', margin: '12px 16px', borderRadius: 8 }}>
             Licence expired. Please contact SuperAdmin to renew access.
           </div>
         )}
-        
+
         <div className="content-wrapper">
           <div key={activeTab} className="animate-slide-up">
             {children}

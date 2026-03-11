@@ -16,6 +16,8 @@ import {
 } from 'chart.js';
 import { Bar, Line, Doughnut, Pie } from 'react-chartjs-2';
 import './Dashboard.css';
+import AttendanceStats from './AttendanceStats';
+import AttendanceCharts from './AttendanceCharts';
 
 ChartJS.register(
   CategoryScale,
@@ -30,7 +32,7 @@ ChartJS.register(
   Filler
 );
 
-const Dashboard = () => {
+const Dashboard = ({ setActiveTab }) => {
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [personsList, setPersonsList] = useState([]);
   const [personAnalytics, setPersonAnalytics] = useState(null);
@@ -392,6 +394,9 @@ const Dashboard = () => {
           <span className="refresh-icon">↻</span> Refresh
         </button>
       </div>
+
+      <AttendanceStats />
+      <AttendanceCharts />
 
       <div className="dashboard-content">
         {/* Left Panel - Person Profiles */}

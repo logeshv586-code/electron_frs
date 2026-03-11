@@ -505,3 +505,333 @@ async def match_face_unknown(image: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error matching face against unknown faces: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def get_metadata():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    metadata_file = os.path.join(base_dir, "data", "metadata.json")
+    try:
+        with open(metadata_file, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+@router.get("/attendance")
+async def get_attendance(
+    target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
+):
+    """Get attendance report for a specific date (Punch In / Punch Out)."""
+    try:
+        if not target_date:
+            target_date = datetime.now().strftime("%Y-%m-%d")
+            
+        target_date_obj = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+    metadata = get_metadata()
+    persons = {}
+    if "persons" in metadata:
+        persons = metadata["persons"]
+    else:
+        for k, v in metadata.items():
+            if k != "persons" and isinstance(v, dict) and 'name' in v:
+                persons[k] = v
+
+    # Build attendance dictionary
+    attendance_records = {}
+    for pid, pdata in persons.items():
+        name = pdata.get("name", pid)
+        attendance_records[pid] = {
+            "s_no": 0,
+            "emp_id": pdata.get("emp_id", ""),
+            "name": name,
+            "department": pdata.get("department", ""),
+            "designation": pdata.get("designation", ""),
+            "status": "Absent",
+            "punch_in": None,
+            "punch_out": None,
+            "working_hours": "-",
+            "is_late": False,
+            "photo_path": pdata.get("photo_path", ""),
+            "events": []
+        }
+
+    timestamp_regex = re.compile(r"(\d{8}_\d{6}(?:_\d{3,6})?)")
+    def extract_ts(face_file: str, img_path: str) -> datetime:
+        match = timestamp_regex.search(face_file)
+        if match:
+            raw = match.group(1)
+            for fmt in ("%Y%m%d_%H%M%S_%f", "%Y%m%d_%H%M%S"):
+                try:
+                    return datetime.strptime(raw, fmt)
+                except ValueError:
+                    continue
+        try:
+            return datetime.fromtimestamp(os.path.getmtime(img_path))
+        except Exception:
+            return datetime.utcnow()
+
+    LATE_THRESHOLD_HOUR = 9
+    LATE_THRESHOLD_MINUTE = 30
+
+    # Scan KNOWN_FACES_DIR
+    if os.path.exists(KNOWN_FACES_DIR):
+        for root_dir, _, files in os.walk(KNOWN_FACES_DIR):
+            for face_file in files:
+                if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                    continue
+                img_path = os.path.join(root_dir, face_file)
+                ts = extract_ts(face_file, img_path)
+                
+                if ts.date() != target_date_obj:
+                    continue
+                
+                relative_path = os.path.relpath(img_path, KNOWN_FACES_DIR)
+                parts = relative_path.split(os.sep)
+                
+                if len(parts) >= 2:
+                    person_id = parts[-2]
+                else:
+                    person_id = "unknown"
+                    
+                if person_id in attendance_records:
+                    attendance_records[person_id]["events"].append(ts)
+
+    # Calculate Punch In / Out and Working Hours
+    result_list = []
+    s_no = 1
+    for pid, record in attendance_records.items():
+        events = sorted(record["events"])
+        if events:
+            punch_in_dt = events[0]
+            punch_out_dt = events[-1]
+            record["punch_in"] = punch_in_dt.strftime("%I:%M %p")
+            record["punch_out"] = punch_out_dt.strftime("%I:%M %p")
+            record["status"] = "Present"
+            
+            # Calculate working hours
+            delta = punch_out_dt - punch_in_dt
+            total_seconds = max(delta.total_seconds(), 0)
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
+            record["working_hours"] = f"{hours}h {minutes}m"
+            
+            # Check if late
+            if punch_in_dt.hour > LATE_THRESHOLD_HOUR or (punch_in_dt.hour == LATE_THRESHOLD_HOUR and punch_in_dt.minute > LATE_THRESHOLD_MINUTE):
+                record["is_late"] = True
+        
+        del record["events"]
+        record["s_no"] = s_no
+        s_no += 1
+        result_list.append(record)
+
+    return {"date": target_date, "attendance": result_list}
+
+@router.get("/dashboard-stats")
+async def get_dashboard_stats(
+    target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
+):
+    """Get statistics for the dashboard."""
+    try:
+        if not target_date:
+            target_date = datetime.now().strftime("%Y-%m-%d")
+        
+        attendance_data = await get_attendance(target_date)
+        records = attendance_data.get("attendance", [])
+        
+        total_users = len(records)
+        present = sum(1 for r in records if r["status"] == "Present")
+        absent = total_users - present
+        late = sum(1 for r in records if r.get("is_late", False))
+        
+        return {
+            "date": target_date,
+            "total_users": total_users,
+            "present": present,
+            "not_marked": absent,
+            "late": late,
+            "half_day": 0,
+            "on_duty": 0,
+            "leave": 0,
+            "weekoff": 0,
+            "wfh": 0
+        }
+    except Exception as e:
+        logger.error(f"Error getting dashboard stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/attendance/weekly")
+async def get_weekly_attendance():
+    """Get attendance summary for the last 7 days."""
+    from datetime import timedelta
+    result = []
+    today = datetime.now().date()
+    for i in range(6, -1, -1):
+        day = today - timedelta(days=i)
+        day_str = day.strftime("%Y-%m-%d")
+        try:
+            data = await get_attendance(day_str)
+            records = data.get("attendance", [])
+            present = sum(1 for r in records if r["status"] == "Present")
+            absent = len(records) - present
+            late = sum(1 for r in records if r.get("is_late", False))
+            result.append({
+                "date": day_str,
+                "day": day.strftime("%a"),
+                "present": present,
+                "absent": absent,
+                "late": late,
+                "total": len(records)
+            })
+        except Exception:
+            result.append({"date": day_str, "day": day.strftime("%a"), "present": 0, "absent": 0, "late": 0, "total": 0})
+    return {"weekly": result}
+
+@router.get("/attendance/aggregate")
+async def get_attendance_aggregate(
+    start_date: str = Query(..., description="Start date in YYYY-MM-DD format"),
+    end_date: str = Query(..., description="End date in YYYY-MM-DD format")
+):
+    """Get aggregated attendance for a date range per employee."""
+    try:
+        from datetime import datetime, timedelta
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        if (end - start).days > 31:
+            raise HTTPException(status_code=400, detail="Date range cannot exceed 31 days")
+        
+        metadata = get_metadata()
+        persons = metadata.get("persons", metadata)
+        
+        aggregate = {}
+        for pid, pdata in persons.items():
+            aggregate[pid] = {
+                "emp_id": pdata.get("emp_id", ""),
+                "name": pdata.get("name", pid),
+                "department": pdata.get("department", ""),
+                "designation": pdata.get("designation", ""),
+                "photo_path": pdata.get("photo_path", ""),
+                "total_present": 0,
+                "total_absent": 0,
+                "total_late": 0,
+                "total_working_hours": 0
+            }
+        
+        current_date = start
+        while current_date <= end:
+            day_str = current_date.strftime("%Y-%m-%d")
+            try:
+                daily_data = await get_attendance(day_str)
+                for record in daily_data.get("attendance", []):
+                    pid = None
+                    for dict_pid, pdata in persons.items():
+                        if pdata.get("name") == record["name"] and pdata.get("emp_id", "") == record.get("emp_id", ""):
+                            pid = dict_pid
+                            break
+                    if not pid:
+                        continue
+                    
+                    if record["status"] == "Present":
+                        aggregate[pid]["total_present"] += 1
+                    else:
+                        aggregate[pid]["total_absent"] += 1
+                        
+                    if record.get("is_late", False):
+                        aggregate[pid]["total_late"] += 1
+                        
+                    wh = record.get("working_hours", "-")
+                    if wh != "-":
+                        parts = wh.replace("h", "").replace("m", "").split()
+                        if len(parts) >= 2:
+                            secs = int(parts[0]) * 3600 + int(parts[1]) * 60
+                            aggregate[pid]["total_working_hours"] += secs
+                            
+            except Exception as e:
+                logger.error(f"Error fetching {day_str}: {e}")
+            
+            current_date += timedelta(days=1)
+            
+        result_list = []
+        s_no = 1
+        for pid, data in aggregate.items():
+            total_sec = data["total_working_hours"]
+            h = total_sec // 3600
+            m = (total_sec % 3600) // 60
+            data["avg_working_hours"] = f"{int(h/data['total_present'])}h {int(m/data['total_present'])}m" if data["total_present"] > 0 else "-"
+            data["total_working_hours"] = f"{h}h {m}m"
+            data["s_no"] = s_no
+            s_no += 1
+            result_list.append(data)
+            
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "aggregate": result_list
+        }
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    except Exception as e:
+        logger.error(f"Error in aggregate report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/attendance/department-stats")
+async def get_department_stats(
+    target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
+):
+    """Get attendance stats grouped by department."""
+    if not target_date:
+        target_date = datetime.now().strftime("%Y-%m-%d")
+    
+    data = await get_attendance(target_date)
+    records = data.get("attendance", [])
+    
+    dept_map = {}
+    for r in records:
+        dept = r.get("department", "Unknown") or "Unknown"
+        if dept not in dept_map:
+            dept_map[dept] = {"present": 0, "absent": 0, "total": 0}
+        dept_map[dept]["total"] += 1
+        if r["status"] == "Present":
+            dept_map[dept]["present"] += 1
+        else:
+            dept_map[dept]["absent"] += 1
+    
+    return {"date": target_date, "departments": dept_map}
+
+@router.get("/employees/export")
+async def export_employees():
+    """Export employee list as CSV."""
+    import csv
+    from io import StringIO
+    from fastapi.responses import StreamingResponse
+    
+    metadata = get_metadata()
+    persons = metadata.get("persons", metadata)
+    
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Emp ID", "Name", "Email", "Phone", "Department", "Designation", "Role", "Status", "Joining Date"])
+    
+    for pid, pdata in persons.items():
+        if not isinstance(pdata, dict) or 'name' not in pdata:
+            continue
+        writer.writerow([
+            pdata.get("emp_id", ""),
+            pdata.get("name", ""),
+            pdata.get("email", ""),
+            pdata.get("phone", ""),
+            pdata.get("department", ""),
+            pdata.get("designation", ""),
+            pdata.get("role", ""),
+            pdata.get("status", "Active"),
+            pdata.get("joining_date", "")
+        ])
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=employees_export.csv"}
+    )
+

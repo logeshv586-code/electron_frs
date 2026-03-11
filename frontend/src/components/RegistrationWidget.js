@@ -1,16 +1,28 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, Image as ImageIcon, Upload, Check, Info, RefreshCw, FileSpreadsheet, Folder, AlertCircle } from 'lucide-react';
+import { User, Image as ImageIcon, Upload, Check, Info, RefreshCw, FileSpreadsheet, Folder, AlertCircle, Download } from 'lucide-react';
 import './RegistrationWidget.css';
 
 import { API_BASE_URL as BASE_URL } from '../utils/apiConfig';
 
 const RegistrationWidget = () => {
-  const [activeMode, setActiveMode] = useState('single');
+  const [activeMode, setActiveMode] = useState('list');
+  const [employees, setEmployees] = useState([]);
+  const [loadingEmployees, setLoadingEmployees] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   const [formData, setFormData] = useState({
+    emp_id: '',
     name: '',
+    email: '',
+    phone: '',
+    role: '',
+    department: '',
+    designation: '',
+    status: 'Active',
     age: '18',
-    gender: '',
-    category: ''
+    gender: ''
   });
   const [autoDetectAge, setAutoDetectAge] = useState(true);
   const [imageFile, setImageFile] = useState(null);
@@ -19,7 +31,6 @@ const RegistrationWidget = () => {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState(''); // 'success' or 'error'
   const [ageError, setAgeError] = useState('');
-  const [categoryError, setCategoryError] = useState('');
   const fileInputRef = useRef(null);
 
   // Bulk registration with Excel + Folder
@@ -36,6 +47,29 @@ const RegistrationWidget = () => {
       setAgeError('');
     }
   }, []);
+
+  const fetchEmployees = async () => {
+    setLoadingEmployees(true);
+    try {
+      const response = await fetch(`${BASE_URL}/api/registration/gallery`);
+      const data = await response.json();
+      const empList = Object.keys(data).map(key => ({
+        id: key,
+        ...data[key]
+      }));
+      setEmployees(empList);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingEmployees(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeMode === 'list') {
+      fetchEmployees();
+    }
+  }, [activeMode]);
 
   const handleInputChange = (field, value) => {
     // Validate age - must be 18 or above
@@ -55,12 +89,6 @@ const RegistrationWidget = () => {
       }
     }
 
-    // Validate category - simplified to allow more standard input types
-    if (field === 'category') {
-      const categoryValue = value.trim();
-      setCategoryError('');
-      // Always update the form field to allow user typing freely
-    }
 
     setFormData(prev => ({
       ...prev,
@@ -97,15 +125,20 @@ const RegistrationWidget = () => {
 
   const resetForm = () => {
     setFormData({
+      emp_id: '',
       name: '',
+      email: '',
+      phone: '',
+      role: '',
+      department: '',
+      designation: '',
+      status: 'Active',
       age: '18',
-      gender: '',
-      category: ''
+      gender: ''
     });
     setImageFile(null);
     setImagePreview(null);
     setAgeError('');
-    setCategoryError('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -123,6 +156,16 @@ const RegistrationWidget = () => {
       return;
     }
 
+    if (!formData.emp_id.trim()) {
+      showMessage('Please enter an Employee ID', 'error');
+      return;
+    }
+
+    if (!formData.department.trim()) {
+      showMessage('Please enter a Department', 'error');
+      return;
+    }
+
     // Validate age if provided
     if (formData.age.trim()) {
       const ageNum = parseInt(formData.age.trim(), 10);
@@ -133,12 +176,6 @@ const RegistrationWidget = () => {
       }
     }
 
-    // Basic category check without strict pattern
-    if (formData.category.trim() && formData.category.trim().length > 50) {
-      showMessage('Category is too long (max 50 characters)', 'error');
-      setCategoryError('Category is too long');
-      return;
-    }
 
     setIsLoading(true);
     setMessage('Registering person...');
@@ -146,10 +183,16 @@ const RegistrationWidget = () => {
     try {
       const formDataToSend = new FormData();
       formDataToSend.append('image', imageFile);
+      formDataToSend.append('emp_id', formData.emp_id.trim());
       formDataToSend.append('name', formData.name.trim());
+      formDataToSend.append('email', formData.email.trim());
+      formDataToSend.append('phone', formData.phone.trim());
+      formDataToSend.append('role', formData.role.trim());
+      formDataToSend.append('department', formData.department.trim());
+      formDataToSend.append('designation', formData.designation.trim());
+      formDataToSend.append('status', formData.status.trim());
       formDataToSend.append('age', autoDetectAge ? '' : (formData.age || ''));
       formDataToSend.append('gender', formData.gender);
-      formDataToSend.append('category', formData.category.trim());
 
       const response = await fetch(`${BASE_URL}/api/registration/register/single`, {
         method: 'POST',
@@ -269,6 +312,12 @@ const RegistrationWidget = () => {
         </div>
         <div className="mode-selector-pill">
           <button
+            className={`mode-pill ${activeMode === 'list' ? 'active' : ''}`}
+            onClick={() => setActiveMode('list')}
+          >
+            Employee List
+          </button>
+          <button
             className={`mode-pill ${activeMode === 'single' ? 'active' : ''}`}
             onClick={() => setActiveMode('single')}
           >
@@ -309,6 +358,115 @@ const RegistrationWidget = () => {
         </div>
       )}
 
+      {activeMode === 'list' && (
+        <div className="employee-list-layout">
+          <div className="list-controls" style={{ marginBottom: '16px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              placeholder="Search employees..."
+              value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              className="input-clean"
+              style={{ maxWidth: '300px' }}
+            />
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              {employees.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()) || (e.emp_id && e.emp_id.toLowerCase().includes(searchTerm.toLowerCase()))).length} employees
+            </span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+              <button className="btn-submit-clean" onClick={() => {
+                window.open(`${BASE_URL}/api/events/employees/export`, '_blank');
+              }} style={{ width: 'auto', background: 'var(--bg-panel)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+                <Download size={16} /> Export CSV
+              </button>
+              <button className="btn-submit-clean" onClick={() => setActiveMode('single')} style={{ width: 'auto' }}>
+                + Add Employee
+              </button>
+            </div>
+          </div>
+
+          <div className="table-container">
+            {loadingEmployees ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading employees...</div>
+            ) : (() => {
+              const filtered = employees.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()) || (e.emp_id && e.emp_id.toLowerCase().includes(searchTerm.toLowerCase())));
+              const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+              const paginatedData = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+              return (
+                <>
+                  <table className="attendance-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Emp ID</th>
+                        <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Name</th>
+                        <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Department</th>
+                        <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Designation</th>
+                        <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Email</th>
+                        <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Phone</th>
+                        <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedData.map((emp, idx) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td style={{ padding: '12px' }}>{emp.emp_id || '-'}</td>
+                          <td style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <img
+                              src={`${BASE_URL}/api/gallery/image/${emp.name}/${emp.image_filename || 'original.jpg'}`}
+                              alt={emp.name}
+                              style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover' }}
+                              onError={(e) => { e.target.style.display = 'none'; }}
+                            />
+                            {emp.name}
+                          </td>
+                          <td style={{ padding: '12px' }}>{emp.department || '-'}</td>
+                          <td style={{ padding: '12px' }}>{emp.designation || '-'}</td>
+                          <td style={{ padding: '12px' }}>{emp.email || '-'}</td>
+                          <td style={{ padding: '12px' }}>{emp.phone || '-'}</td>
+                          <td style={{ padding: '12px' }}>
+                            <span style={{
+                              padding: '4px 8px',
+                              borderRadius: '12px',
+                              fontSize: '0.8rem',
+                              backgroundColor: emp.status === 'Active' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                              color: emp.status === 'Active' ? '#10b981' : '#ef4444'
+                            }}>
+                              {emp.status || 'Active'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                      {filtered.length === 0 && (
+                        <tr>
+                          <td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No employees found</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+
+                  {/* Pagination */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 0', flexWrap: 'wrap', gap: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Rows per page:</span>
+                      <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} className="select-clean" style={{ width: 'auto', padding: '4px 8px' }}>
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Page {currentPage} of {totalPages}</span>
+                      <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={{ padding: '4px 10px', cursor: 'pointer', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-panel)', color: 'var(--text-primary)' }}>←</button>
+                      <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} style={{ padding: '4px 10px', cursor: 'pointer', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-panel)', color: 'var(--text-primary)' }}>→</button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
       {activeMode === 'single' && (
         <div className="single-registration-layout">
           {/* Left Panel: Person Info */}
@@ -334,6 +492,96 @@ const RegistrationWidget = () => {
                   disabled={isLoading}
                   className="input-clean"
                 />
+              </div>
+
+              <div className="form-row-split">
+                <div className="form-group">
+                  <label>Emp ID <span className="required">*</span></label>
+                  <input
+                    type="text"
+                    value={formData.emp_id}
+                    onChange={(e) => handleInputChange('emp_id', e.target.value)}
+                    placeholder="e.g. EMP1001"
+                    disabled={isLoading}
+                    className="input-clean"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Department <span className="required">*</span></label>
+                  <input
+                    type="text"
+                    value={formData.department}
+                    onChange={(e) => handleInputChange('department', e.target.value)}
+                    placeholder="e.g. IT"
+                    disabled={isLoading}
+                    className="input-clean"
+                  />
+                </div>
+              </div>
+
+              <div className="form-row-split">
+                <div className="form-group">
+                  <label>Designation</label>
+                  <input
+                    type="text"
+                    value={formData.designation}
+                    onChange={(e) => handleInputChange('designation', e.target.value)}
+                    placeholder="e.g. Developer"
+                    disabled={isLoading}
+                    className="input-clean"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Email</label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => handleInputChange('email', e.target.value)}
+                    placeholder="e.g. john@company.com"
+                    disabled={isLoading}
+                    className="input-clean"
+                  />
+                </div>
+              </div>
+
+              <div className="form-row-split">
+                <div className="form-group">
+                  <label>Phone</label>
+                  <input
+                    type="text"
+                    value={formData.phone}
+                    onChange={(e) => handleInputChange('phone', e.target.value)}
+                    placeholder="e.g. 1234567890"
+                    disabled={isLoading}
+                    className="input-clean"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Role</label>
+                  <input
+                    type="text"
+                    value={formData.role}
+                    onChange={(e) => handleInputChange('role', e.target.value)}
+                    placeholder="e.g. Staff"
+                    disabled={isLoading}
+                    className="input-clean"
+                  />
+                </div>
+              </div>
+
+              <div className="form-row-split">
+                <div className="form-group">
+                  <label>Status</label>
+                  <select
+                    value={formData.status}
+                    onChange={(e) => handleInputChange('status', e.target.value)}
+                    disabled={isLoading}
+                    className="select-clean"
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                  </select>
+                </div>
               </div>
 
               <div className="form-row-split">
@@ -436,18 +684,6 @@ const RegistrationWidget = () => {
                 </div>
               </div>
 
-              <div className="form-group">
-                <label>Category</label>
-                <input
-                  type="text"
-                  value={formData.category}
-                  onChange={(e) => handleInputChange('category', e.target.value)}
-                  placeholder="e.g., Employee, Visitor, Student"
-                  disabled={isLoading}
-                  className="input-clean"
-                />
-                {categoryError && <span className="field-error">{categoryError}</span>}
-              </div>
 
               <div className="info-alert">
                 <Info size={16} />

@@ -77,9 +77,16 @@ async def options_handler(path: str):
 
 class PersonDetails(BaseModel):
     name: str  # Only name is required
+    emp_id: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    role: str | None = "User"
+    department: str | None = None
+    designation: str | None = None
+    joining_date: str | None = None
+    status: str | None = "Active"
     age: str | None = None  # Optional
     gender: str | None = None  # Optional
-    category: str | None = "Unknown"  # Optional with default value
 
 class RegistrationResponse(BaseModel):
     status: str
@@ -551,6 +558,8 @@ class FaceProcessor:
             df['age'] = df.get('age', '')
             df['gender'] = df.get('gender', '')
             df['category'] = df.get('category', 'unknown')
+            for col in ['emp_id', 'email', 'phone', 'role', 'department', 'designation', 'zone', 'status']:
+                df[col] = df.get(col, '')
 
             # Convert category to lowercase and validate
             df['category'] = df['category'].str.lower()
@@ -582,7 +591,15 @@ class FaceProcessor:
                         'name': person_name,
                         'age': str(row['age']).strip() if pd.notna(row['age']) else '',
                         'gender': str(row['gender']).strip() if pd.notna(row['gender']) else '',
-                        'category': str(row['category']).strip() if pd.notna(row['category']) else 'unknown'
+                        'category': str(row['category']).strip() if pd.notna(row['category']) else 'unknown',
+                        'emp_id': str(row['emp_id']).strip() if pd.notna(row['emp_id']) else '',
+                        'email': str(row['email']).strip() if pd.notna(row['email']) else '',
+                        'phone': str(row['phone']).strip() if pd.notna(row['phone']) else '',
+                        'role': str(row['role']).strip() if pd.notna(row['role']) else 'User',
+                        'department': str(row['department']).strip() if pd.notna(row['department']) else '',
+                        'designation': str(row['designation']).strip() if pd.notna(row['designation']) else '',
+                        'zone': str(row['zone']).strip() if pd.notna(row['zone']) else '',
+                        'status': str(row['status']).strip() if pd.notna(row['status']) else 'Active'
                     }
 
                     # Get all images from person's folder
@@ -661,14 +678,21 @@ async def register_single(
     name: str = Form(...),
     age: str | None = Form(None),
     gender: str | None = Form(None),
-    category: str | None = Form(None)
+    emp_id: str | None = Form(None),
+    email: str | None = Form(None),
+    phone: str | None = Form(None),
+    role: str | None = Form(None),
+    department: str | None = Form(None),
+    designation: str | None = Form(None),
+    joining_date: str | None = Form(None),
+    status: str | None = Form(None)
 ):
     """Register a single person with face image"""
     print(f"--- Registration Request ---")
     print(f"Name: {name!r}")
+    print(f"Emp ID: {emp_id!r}")
     print(f"Age: {age!r}")
     print(f"Gender: {gender!r}")
-    print(f"Category: {category!r}")
     try:
         # Validate image file type
         if not image.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -753,9 +777,16 @@ async def register_single(
         registration_time = datetime.now().isoformat()
         person_data[unique_name] = {
             "name": name,
+            "emp_id": emp_id.strip() if emp_id else "",
+            "email": email.strip() if email else "",
+            "phone": phone.strip() if phone else "",
+            "role": role.strip() if role else "User",
+            "department": department.strip() if department else "",
+            "designation": designation.strip() if designation else "",
+            "joining_date": joining_date.strip() if joining_date else "",
+            "status": status.strip() if status else "Active",
             "age": str(final_age_val) if isinstance(final_age_val, int) else "N/A",
             "gender": final_gender,
-            "category": category.lower() if category else "unknown",
             "registration_date": registration_time,
             "gallery_path": os.path.relpath(gallery_dir, BASE_DIR).replace('\\', '/'),
             "photo_path": os.path.relpath(original_path, BASE_DIR).replace('\\', '/'),
@@ -900,6 +931,14 @@ async def register_bulk(
                 
                 metadata[safe_name] = {
                     'name': person_name,
+                    'emp_id': result['details'].get('emp_id', ''),
+                    'email': result['details'].get('email', ''),
+                    'phone': result['details'].get('phone', ''),
+                    'role': result['details'].get('role', 'User'),
+                    'department': result['details'].get('department', ''),
+                    'designation': result['details'].get('designation', ''),
+                    'zone': result['details'].get('zone', ''),
+                    'status': result['details'].get('status', 'Active'),
                     'age': str(final_age) if isinstance(final_age, int) else str(result['details'].get('age', '')) or "N/A",
                     'gender': final_gender,
                     'category': result['details']['category'],

@@ -850,3 +850,86 @@ textarea {
   letter-spacing: 1px;
   text-shadow: 0 0 3px rgba(6, 182, 212, 0.25);
 }
+
+/* ===========================
+   Print Styles for PDF Export
+   =========================== */
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .sidebar,
+  .sidebar-nav,
+  .sidebar-header,
+  .user-profile-section,
+  .collapse-btn,
+  .report-actions,
+  .export-buttons,
+  .btn-export,
+  .btn-today,
+  .btn-nav,
+  .btn-add-holiday,
+  .search-bar,
+  .date-picker-wrap,
+  .list-controls,
+  .nav-item,
+  .logout-btn,
+  .refresh-button {
+    display: none !important;
+  }
+
+  .main-layout {
+    margin-left: 0 !important;
+    padding: 0 !important;
+  }
+
+  .main-layout .main-content {
+    margin-left: 0 !important;
+    padding: 16px !important;
+  }
+
+  .attendance-table {
+    border: 1px solid #ccc;
+  }
+
+  .attendance-table th {
+    background: #f0f0f0 !important;
+    color: #000 !important;
+    border: 1px solid #ccc !important;
+  }
+
+  .attendance-table td {
+    border: 1px solid #ccc !important;
+    color: #000 !important;
+  }
+
+  .status-badge {
+    border: 1px solid #666 !important;
+  }
+
+  .report-header h2 {
+    color: #000 !important;
+    font-size: 1.2rem;
+  }
+
+  .summary-bar {
+    border: 1px solid #ccc;
+    padding: 8px;
+    margin-bottom: 12px;
+  }
+
+  .summary-card {
+    border: 1px solid #ccc !important;
+  }
+}
+
+/* Required field asterisk */
+.required {
+  color: #ef4444;
+  font-weight: bold;
+  margin-left: 2px;
+}

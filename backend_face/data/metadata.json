@@ -11,17 +11,5 @@
         "age_source": "ai",
         "predicted_age": 24,
         "predicted_gender": "Male"
-    },
-    "rahman": {
-        "name": "rahman",
-        "age": "22",
-        "gender": "Male",
-        "category": "employee",
-        "registration_date": "2025-11-08T11:33:04.153329",
-        "gallery_path": "data/gallery/rahman",
-        "photo_path": "data/gallery/rahman/1.jpg",
-        "age_range": "N/A",
-        "age_source": "unknown",
-        "predicted_age": null
     }
 }

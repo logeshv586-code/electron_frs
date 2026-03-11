@@ -119,40 +119,39 @@ const Dashboard = () => {
       const events = Array.isArray(eventsRes.data) ? eventsRes.data : [];
       const personMap = new Map();
 
-      // 1. Initialize with Gallery data
+      // 1. Initialize with Gallery data (ONLY ACTIVE GALLERY PERSONS)
       Object.values(gallery).forEach(person => {
+        if (!person || !person.name) return;
+
         const imgFilename = person.image_filename || 'original.jpg';
         // Construct clean URL for gallery image
         const imgUrl = getApiUrl(`/api/gallery/image/${person.name}/${imgFilename}`);
+        const cleanName = person.name.toLowerCase();
 
-        personMap.set(person.name, {
-          name: person.name,
+        personMap.set(cleanName, {
+          name: person.name, // Keep original casing for display
           count: 0,
           profile_image: imgUrl,
           last_seen: null
         });
       });
 
-      // 2. Process Events to update counts and add missing persons
+      // 2. Process Events to update counts ONLY for existing persons
       events.forEach(event => {
-        if (!personMap.has(event.name)) {
-          personMap.set(event.name, {
-            name: event.name,
-            count: 0,
-            profile_image: fixImageUrl(event.image_path),
-            last_seen: null
-          });
-        }
+        if (!event || !event.name || event.name.toLowerCase() === 'unknown') return;
 
-        const p = personMap.get(event.name);
-        p.count += 1;
+        const cleanEventName = event.name.toLowerCase();
 
-        // Update last_seen
-        if (!p.last_seen || new Date(event.timestamp) > new Date(p.last_seen)) {
-          p.last_seen = event.timestamp;
-          // If not in gallery (no official photo), use latest event image
-          if (!gallery[event.name]) {
-            p.profile_image = fixImageUrl(event.image_path);
+        // Only increment and update if they are currently in the gallery
+        if (personMap.has(cleanEventName)) {
+          const p = personMap.get(cleanEventName);
+          p.count += 1;
+
+          // Update last_seen
+          if (!p.last_seen || new Date(event.timestamp) > new Date(p.last_seen)) {
+            p.last_seen = event.timestamp;
+            // Note: we no longer overwrite profile_image from events
+            // We want to force it to use the official gallery photo.
           }
         }
       });

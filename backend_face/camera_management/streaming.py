@@ -20,6 +20,8 @@ class CameraStreamManager:
     def __init__(self):
         self.active_streams: Dict[str, Dict] = {}
         self.stream_lock = threading.Lock()
+        # Bounding box visualization toggle (default: off)
+        self.show_bounding_box: bool = False
         # Per-stream frame shared state (replaces queues to prevent buffering/looping)
         self.current_frames: Dict[str, Tuple[np.ndarray, int]] = {}  # The absolute latest raw frame to process
         self.processed_frames_latest: Dict[str, np.ndarray] = {}  # The absolute latest processed frame
@@ -133,6 +135,15 @@ class CameraStreamManager:
                 if info['camera_id'] == camera_id and info['is_active']:
                     return stream_id
         return None
+    
+    def set_bounding_box(self, enabled: bool) -> None:
+        """Set bounding box visualization toggle."""
+        self.show_bounding_box = enabled
+        logger.info(f"Bounding box visualization {'enabled' if enabled else 'disabled'}")
+    
+    def get_bounding_box(self) -> bool:
+        """Get current bounding box toggle state."""
+        return self.show_bounding_box
     
     def _validate_frame(self, frame: np.ndarray) -> bool:
         """Validate frame quality - check for corruption or pixelation"""
@@ -290,7 +301,7 @@ class CameraStreamManager:
     def _face_processing_worker(self, stream_id: str):
         """Background worker thread for async face processing using shared state (no queues)"""
         frame_counter = 0
-        PROCESS_EVERY_N_FRAMES = 3  # Reduces latency by processing slightly fewer frames
+        PROCESS_EVERY_N_FRAMES = 2  # Process every 2nd frame for balance of speed and accuracy
         
         last_processed_frame_num = -1
         
@@ -314,13 +325,18 @@ class CameraStreamManager:
                     
                     # Skip processing for some frames to maintain frame rate
                     if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
-                        # Use raw frame without processing
+                        # Use raw frame WITHOUT bounding boxes on skipped frames
+                        # (avoids stale bbox positions appearing on wrong faces)
                         self.processed_frames_latest[stream_id] = frame.copy()
                     else:
                         # Process frame for face detection
                         try:
                             from face_pipeline import process_frame as face_process_frame
-                            processed_frame, _ = face_process_frame(frame, force_process=True, stream_id=stream_id)
+                            from face_pipeline import render_bounding_boxes
+                            processed_frame, detections = face_process_frame(frame, force_process=True, stream_id=stream_id)
+                            # Only render bounding boxes from THIS frame's fresh detections
+                            if self.show_bounding_box and detections:
+                                processed_frame = render_bounding_boxes(processed_frame, detections, show_bounding_box=True)
                             self.processed_frames_latest[stream_id] = processed_frame
                         except Exception as face_error:
                             logger.debug(f"Face processing error for stream {stream_id}: {face_error}")
@@ -343,8 +359,8 @@ class CameraStreamManager:
         reconnect_attempts = 0
         max_reconnect_attempts = 5
 
-        # JPEG encoding parameters - Optimized for Tesla T4: High quality for clear streams
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+        # JPEG encoding parameters - Optimized for smooth streaming
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
         
         # Initialize processing thread for this stream
         if stream_id not in self.processing_threads:

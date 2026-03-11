@@ -674,19 +674,84 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
                 save_thread = threading.Thread(target=_save_face_async, daemon=True)
                 save_thread.start()
 
-        # Draw and store
-        cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"{name} ({conf:.2f})"
-        label_y = y1 - 10 if y1 - 10 > 10 else y1 + 10
-        cv2.putText(
-            frame_bgr,
-            label,
-            (x1, label_y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-        )
         detections.append({"name": name, "conf": conf, "bbox": (x1, y1, x2, y2)})
 
     return frame_bgr, detections
+
+
+def render_bounding_boxes(frame: np.ndarray, detections: List[Dict[str, Any]], show_bounding_box: bool = True) -> np.ndarray:
+    """Draw bounding boxes on the frame as a separate visualization overlay.
+    
+    This function is purely cosmetic and does NOT affect detection, recognition,
+    or event-saving logic. It should be called after process_frame().
+    
+    Args:
+        frame: BGR frame to annotate
+        detections: List of detection dicts from process_frame(), each with 'name', 'conf', 'bbox'
+        show_bounding_box: If False, returns the frame unchanged
+    
+    Returns:
+        Annotated frame (copy) if show_bounding_box is True, otherwise the original frame
+    """
+    if not show_bounding_box or not detections:
+        return frame
+    
+    annotated = frame.copy()
+    
+    # Scale font based on frame resolution for consistent appearance
+    h, w = annotated.shape[:2]
+    font_scale = max(0.8, min(1.5, w / 640.0))  # 1.0 at 640px, scales up for HD
+    thickness = max(2, int(font_scale * 2))
+    box_thickness = max(2, int(font_scale * 2.5))
+    
+    for det in detections:
+        name = det.get("name", "Unknown")
+        conf = det.get("conf", 0.0)
+        bbox = det.get("bbox")
+        if bbox is None:
+            continue
+        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+        
+        # Green for known faces, red for unknown
+        is_known = name != "Unknown"
+        color = (0, 255, 0) if is_known else (0, 0, 255)
+        
+        # Draw bounding box with rounded corners effect (thick)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, box_thickness)
+        
+        # Build label text — name only, no confidence number
+        label = name
+        
+        # Calculate label dimensions
+        (label_w, label_h), baseline = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
+        )
+        
+        # Position label ABOVE the bounding box
+        label_y_top = y1 - label_h - baseline - 8
+        if label_y_top < 0:
+            # If no room above, place BELOW top edge
+            label_y_top = y1 + 4
+        
+        # Draw filled background behind label for readability
+        cv2.rectangle(
+            annotated,
+            (x1, label_y_top),
+            (x1 + label_w + 8, label_y_top + label_h + baseline + 8),
+            color,
+            cv2.FILLED
+        )
+        
+        # Draw label text (white on colored background)
+        cv2.putText(
+            annotated,
+            label,
+            (x1 + 4, label_y_top + label_h + 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+    
+    return annotated

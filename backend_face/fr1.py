@@ -45,8 +45,23 @@ IGNORE_FOLDERS = {
 
 
 def load_known_faces(data_dir: str) -> Tuple[List[np.ndarray], List[str]]:
+    import pickle
+    
     known_encodings: List[np.ndarray] = []
     known_names: List[str] = []
+    
+    cache_path = os.path.join(data_dir, "embeddings_cache.pkl")
+    cache = {}
+    
+    # Load existing cache if available
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                cache = pickle.load(f)
+            print(f"[INFO] Loaded {len(cache)} entries from embeddings cache")
+        except Exception as e:
+            print(f"[WARN] Failed to load cache, starting fresh: {e}")
+            cache = {}
 
     if not os.path.isdir(data_dir):
         raise ValueError(f"Data directory does not exist: {data_dir}")
@@ -58,33 +73,74 @@ def load_known_faces(data_dir: str) -> Tuple[List[np.ndarray], List[str]]:
     ]
     print(f"[INFO] Found {len(person_dirs)} person folders in dataset")
 
+    current_files = set()
+    new_computations = 0
+
     for person in person_dirs:
         person_path = os.path.join(data_dir, person)
         pattern = os.path.join(person_path, "*")
         files = [f for f in glob.glob(pattern) if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp"))]
         if not files:
-            print(f"[WARN] No images for '{person}' in {person_path} - skipping")
             continue
 
         for img_path in files:
+            current_files.add(img_path)
             try:
-                img = face_recognition.load_image_file(img_path)  # RGB
-                locations = face_recognition.face_locations(img, model="hog")  # local dataset encoding - hog is OK
+                mtime = os.path.getmtime(img_path)
+                
+                # Check cache
+                if img_path in cache and cache[img_path]["mtime"] == mtime:
+                    # Valid cache hit
+                    for enc in cache[img_path]["encodings"]:
+                        known_encodings.append(enc)
+                        known_names.append(person)
+                    continue
+
+                # Cache miss or file modified - compute encoding
+                img = face_recognition.load_image_file(img_path)
+                locations = face_recognition.face_locations(img, model="hog")
                 if not locations:
                     print(f"[WARN] No face found in {img_path} - skipping image")
                     continue
+                
                 encs = face_recognition.face_encodings(img, known_face_locations=locations, num_jitters=1)
                 if not encs:
                     print(f"[WARN] Could not encode face in {img_path} - skipping")
                     continue
+                
+                # Update lists and cache
                 for enc in encs:
                     known_encodings.append(enc)
                     known_names.append(person)
-                print(f"[INFO] Loaded {img_path} -> {person} (faces: {len(encs)})")
+                
+                cache[img_path] = {
+                    "mtime": mtime,
+                    "encodings": encs,
+                    "name": person
+                }
+                new_computations += 1
+                print(f"[INFO] Computed new encoding for {img_path} -> {person}")
+                
             except Exception as e:
                 print(f"[ERROR] Failed to process {img_path}: {e}")
 
-    print(f"[INFO] Total encodings loaded: {len(known_encodings)}")
+    # Cleanup deleted files from cache
+    files_to_remove = [p for p in cache.keys() if p not in current_files]
+    if files_to_remove:
+        for p in files_to_remove:
+            del cache[p]
+        print(f"[INFO] Removed {len(files_to_remove)} deleted files from cache")
+
+    # Save cache to disk if things changed
+    if new_computations > 0 or files_to_remove:
+        try:
+            with open(cache_path, "wb") as f:
+                pickle.dump(cache, f)
+            print(f"[INFO] Saved updated cache with {len(cache)} entries")
+        except Exception as e:
+            print(f"[ERROR] Failed to save cache: {e}")
+
+    print(f"[INFO] Total encodings loaded: {len(known_encodings)} (Computed: {new_computations})")
     return known_encodings, known_names
 
 

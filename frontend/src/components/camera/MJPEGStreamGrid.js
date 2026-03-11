@@ -12,6 +12,7 @@ const MJPEGStreamGrid = ({ collectionName }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [gridLayout, setGridLayout] = useState('2x2');
+  const [showBoundingBox, setShowBoundingBox] = useState(false);
   const imgRefs = useRef({});
 
   // Grid layout configurations
@@ -40,7 +41,7 @@ const MJPEGStreamGrid = ({ collectionName }) => {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (response.data.started_streams) {
         setStreams(response.data.started_streams);
         console.log('Started streams:', response.data.started_streams);
@@ -92,6 +93,34 @@ const MJPEGStreamGrid = ({ collectionName }) => {
     };
   }, []);
 
+  // Fetch bounding box toggle state on mount
+  useEffect(() => {
+    const fetchBoundingBoxStatus = async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/bounding-box/status`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        setShowBoundingBox(response.data.enabled);
+      } catch (err) {
+        console.warn('Could not fetch bounding box status:', err);
+      }
+    };
+    fetchBoundingBoxStatus();
+  }, [token]);
+
+  const toggleBoundingBox = async () => {
+    const newState = !showBoundingBox;
+    try {
+      await axios.post(`${API_BASE_URL}/api/bounding-box/toggle`,
+        { enabled: newState },
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      setShowBoundingBox(newState);
+    } catch (err) {
+      console.error('Error toggling bounding box:', err);
+    }
+  };
+
   const currentLayout = gridLayouts[gridLayout];
   const maxStreams = currentLayout.cols * currentLayout.rows;
   const displayStreams = streams.slice(0, maxStreams);
@@ -100,28 +129,36 @@ const MJPEGStreamGrid = ({ collectionName }) => {
     <div className="mjpeg-stream-grid">
       <div className="stream-controls">
         <div className="control-group">
-          <button 
-            onClick={startStreams} 
+          <button
+            onClick={startStreams}
             disabled={loading || !collectionName}
             className="btn btn-primary"
           >
             {loading ? 'Starting...' : 'Start Streams'}
           </button>
-          
-          <button 
-            onClick={stopAllStreams} 
+
+          <button
+            onClick={stopAllStreams}
             disabled={streams.length === 0}
             className="btn btn-secondary"
           >
             Stop All Streams
           </button>
+
+          <button
+            onClick={toggleBoundingBox}
+            className={`btn btn-bbox-toggle ${showBoundingBox ? 'active' : ''}`}
+            title={showBoundingBox ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
+          >
+            {showBoundingBox ? '⬜ Hide Boxes' : '🔲 Show Boxes'}
+          </button>
         </div>
 
         <div className="control-group">
           <label htmlFor="grid-layout">Grid Layout:</label>
-          <select 
+          <select
             id="grid-layout"
-            value={gridLayout} 
+            value={gridLayout}
             onChange={(e) => setGridLayout(e.target.value)}
             className="grid-selector"
           >
@@ -146,7 +183,7 @@ const MJPEGStreamGrid = ({ collectionName }) => {
         </div>
       )}
 
-      <div 
+      <div
         className="video-grid"
         style={{
           gridTemplateColumns: `repeat(${currentLayout.cols}, 1fr)`,
@@ -163,7 +200,7 @@ const MJPEGStreamGrid = ({ collectionName }) => {
                 ●
               </span>
             </div>
-            
+
             <div className="video-container">
               <img
                 ref={el => imgRefs.current[stream.stream_id] = el}
@@ -174,7 +211,7 @@ const MJPEGStreamGrid = ({ collectionName }) => {
                 onLoad={() => handleImageLoad(stream.stream_id)}
               />
             </div>
-            
+
             <div className="video-footer">
               <small>{stream.stream_id}</small>
             </div>
@@ -193,8 +230,8 @@ const MJPEGStreamGrid = ({ collectionName }) => {
 
       {streams.length > maxStreams && (
         <div className="overflow-notice">
-          <p>Showing {maxStreams} of {streams.length} streams. 
-             Increase grid size to see more cameras.</p>
+          <p>Showing {maxStreams} of {streams.length} streams.
+            Increase grid size to see more cameras.</p>
         </div>
       )}
     </div>

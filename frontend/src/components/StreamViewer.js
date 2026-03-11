@@ -12,6 +12,7 @@ const StreamViewer = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [gridLayout, setGridLayout] = useState('2x2');
+  const [showBoundingBox, setShowBoundingBox] = useState(false);
   const { token } = useAuthStore();
   // Auto-refresh functionality removed
 
@@ -31,21 +32,21 @@ const StreamViewer = () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const response = await axios.get(`${API_BASE_URL}/api/collections/cameras`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (response.data.cameras) {
         const allCameras = response.data.cameras;
         setCameras(allCameras);
-        
+
         // Filter only active cameras for streaming
         const activeOnes = allCameras.filter(camera => camera.is_active);
         setActiveCameras(activeOnes);
-        
+
         console.log('Fetched cameras:', allCameras);
         console.log('Active cameras for streaming:', activeOnes);
       } else {
@@ -77,7 +78,7 @@ const StreamViewer = () => {
   // Extract IP address from RTSP URL
   const extractIPFromRTSP = (rtspUrl) => {
     if (!rtspUrl) return 'Unknown';
-    
+
     try {
       const url = new URL(rtspUrl);
       return url.hostname;
@@ -91,7 +92,35 @@ const StreamViewer = () => {
   // Fetch cameras from camera management system on component mount only
   useEffect(() => {
     fetchCameras();
-  }, []);
+
+    // Also fetch initial bounding box toggle state
+    const fetchBoundingBoxStatus = async () => {
+      if (!token) return;
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/bounding-box/status`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        setShowBoundingBox(response.data.enabled);
+      } catch (err) {
+        console.warn('Could not fetch bounding box status:', err);
+      }
+    };
+    fetchBoundingBoxStatus();
+  }, [token]);
+
+  // Toggle bounding box visibility
+  const toggleBoundingBox = async () => {
+    const newState = !showBoundingBox;
+    try {
+      await axios.post(`${API_BASE_URL}/api/bounding-box/toggle`,
+        { enabled: newState },
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      setShowBoundingBox(newState);
+    } catch (err) {
+      console.error('Error toggling bounding box:', err);
+    }
+  };
 
   // Handle player events
   const handlePlayerPlay = (camera) => {
@@ -146,9 +175,9 @@ const StreamViewer = () => {
         <div className="header-controls">
           <div className="control-group">
             <label htmlFor="grid-layout">Layout:</label>
-            <select 
+            <select
               id="grid-layout"
-              value={gridLayout} 
+              value={gridLayout}
               onChange={(e) => setGridLayout(e.target.value)}
               className="layout-selector"
             >
@@ -163,7 +192,17 @@ const StreamViewer = () => {
           </div>
 
           <div className="control-group">
-            <button 
+            <button
+              onClick={toggleBoundingBox}
+              className={`btn-bbox-toggle ${showBoundingBox ? 'active' : ''}`}
+              title={showBoundingBox ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
+            >
+              {showBoundingBox ? '⬜ Hide Boxes' : '🔲 Show Boxes'}
+            </button>
+          </div>
+
+          <div className="control-group">
+            <button
               onClick={fetchCameras}
               className="refresh-btn"
               disabled={loading}
@@ -200,7 +239,7 @@ const StreamViewer = () => {
             </div>
           </div>
         ) : (
-          <div 
+          <div
             className="video-grid"
             style={{
               gridTemplateColumns: `repeat(${currentLayout.cols}, 1fr)`,
@@ -213,7 +252,7 @@ const StreamViewer = () => {
                   <span className="camera-name">{camera.name}</span>
                   <span className="stream-status live">● LIVE</span>
                 </div>
-                
+
                 <div className="video-container">
                   <MJPEGPlayer
                     camera={camera}
@@ -221,7 +260,7 @@ const StreamViewer = () => {
                     onError={(error) => handlePlayerError(camera, error)}
                   />
                 </div>
-                
+
                 <div className="video-footer">
                   <span className="camera-ip">{camera.ip}</span>
                   <span className="camera-collection">{camera.collectionId}</span>
@@ -230,8 +269,8 @@ const StreamViewer = () => {
             ))}
 
             {/* Fill empty cells */}
-            {Array.from({ 
-              length: Math.max(0, currentLayout.maxStreams - convertedCameras.length) 
+            {Array.from({
+              length: Math.max(0, currentLayout.maxStreams - convertedCameras.length)
             }).map((_, index) => (
               <div key={`empty-${index}`} className="video-cell empty">
                 <div className="empty-placeholder">
@@ -248,7 +287,7 @@ const StreamViewer = () => {
           <div className="overflow-notice">
             <Settings size={16} />
             <span>
-              Showing {currentLayout.maxStreams} of {activeCameras.length} active cameras. 
+              Showing {currentLayout.maxStreams} of {activeCameras.length} active cameras.
               Increase grid size to view more streams.
             </span>
           </div>

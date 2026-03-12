@@ -1100,18 +1100,32 @@ async def get_gallery(request: Request, name: Optional[str] = None, category: Op
                 persons = {k: v for k, v in persons.items() if v.get("created_by") == username}
         else:
             if os.path.exists(GALLERY_DIR):
-                for entry in os.scandir(GALLERY_DIR):
-                    if not entry.is_dir():
-                        continue
-                    persons[entry.name] = {
-                        "name": entry.name,
-                        "age": "N/A",
-                        "gender": "N/A",
-                        "category": "unknown",
-                        "registration_date": None,
-                        "gallery_path": os.path.relpath(entry.path, BASE_DIR).replace('\\', '/'),
-                        "photo_path": os.path.relpath(os.path.join(entry.path, "1.jpg"), BASE_DIR).replace('\\', '/')
-                    }
+                target_dirs = []
+                if company_id:
+                    target_dirs = [(os.path.join(GALLERY_DIR, company_id), company_id)]
+                elif current_user.get("role") == "SuperAdmin":
+                    # Scan all subdirectories (each is a company_id)
+                    for entry in os.scandir(GALLERY_DIR):
+                        if entry.is_dir():
+                            target_dirs.append((entry.path, entry.name))
+                else:
+                    target_dirs = [(os.path.join(GALLERY_DIR, "default"), "default")]
+
+                for tdir, t_company_id in target_dirs:
+                    if not os.path.exists(tdir): continue
+                    for entry in os.scandir(tdir):
+                        if not entry.is_dir():
+                            continue
+                        persons[entry.name] = {
+                            "name": entry.name,
+                            "age": "N/A",
+                            "gender": "N/A",
+                            "category": "unknown",
+                            "registration_date": None,
+                            "gallery_path": os.path.relpath(entry.path, BASE_DIR).replace('\\', '/'),
+                            "photo_path": os.path.relpath(os.path.join(entry.path, "1.jpg"), BASE_DIR).replace('\\', '/'),
+                            "company_id": t_company_id
+                        }
 
         processed_data = {}
         for person_id, person_data in persons.items():
@@ -1134,15 +1148,19 @@ async def get_gallery(request: Request, name: Optional[str] = None, category: Op
                 image_filename = str(photo_path).replace('\\', '/').split('/')[-1]
 
             if not image_filename:
-                p1 = os.path.join(GALLERY_DIR, person_id, "1.jpg")
-                p2 = os.path.join(GALLERY_DIR, person_id, "original.jpg")
+                # Determine correct folder based on person's company_id
+                img_company_id = person_data.get('company_id') or company_id or 'default'
+                person_folder = os.path.join(GALLERY_DIR, img_company_id, person_id)
+                
+                p1 = os.path.join(person_folder, "1.jpg")
+                p2 = os.path.join(person_folder, "original.jpg")
                 if os.path.exists(p1):
                     image_filename = "1.jpg"
                 elif os.path.exists(p2):
                     image_filename = "original.jpg"
                 else:
                     try:
-                        folder = os.path.join(GALLERY_DIR, person_id)
+                        folder = person_folder
                         candidates = [
                             f.name for f in os.scandir(folder)
                             if f.is_file() and f.name.lower().endswith((".jpg", ".jpeg", ".png"))
@@ -1155,10 +1173,8 @@ async def get_gallery(request: Request, name: Optional[str] = None, category: Op
             processed_data[person_id]['image_filename'] = image_filename
             
             # Construct tenant-aware image URL
-            if company_id:
-                processed_data[person_id]['image_url'] = f"/api/gallery/image/{company_id}/{person_id}/{image_filename}"
-            else:
-                processed_data[person_id]['image_url'] = f"/api/gallery/image/{person_id}/{image_filename}"
+            url_company_id = company_id or "default"
+            processed_data[person_id]['image_url'] = f"/api/gallery/image/{url_company_id}/{person_id}/{image_filename}"
 
         return processed_data
     except Exception as e:

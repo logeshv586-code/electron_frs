@@ -889,3 +889,95 @@
     height: 80px;
   }
 }
+/* Forgot Password Styles */
+.forgot-password-link {
+  text-align: right;
+  margin-top: -15px;
+  margin-bottom: 20px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  transition: color 0.3s ease;
+  padding: 5px;
+}
+
+.link-btn:hover {
+  color: var(--cyber-primary);
+  text-decoration: underline;
+}
+
+.forgot-password-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(15px);
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+  animation: fadeIn 0.3s ease;
+}
+
+.forgot-password-card {
+  width: 100%;
+  max-width: 350px;
+  text-align: center;
+}
+
+.forgot-password-card h3 {
+  font-size: 24px;
+  margin-bottom: 15px;
+  color: var(--cyber-primary);
+  letter-spacing: 2px;
+}
+
+.forgot-password-card p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 30px;
+  line-height: 1.6;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 15px;
+  margin-top: 30px;
+}
+
+.forgot-status {
+  margin-top: 15px;
+  padding: 10px;
+  background: rgba(0, 102, 255, 0.1);
+  border: 1px solid var(--cyber-primary);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #fff;
+}
+
+.login-button.secondary {
+  background: transparent;
+  border: 1px solid var(--card-border);
+  box-shadow: none;
+}
+
+.login-button.secondary:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--text-secondary);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

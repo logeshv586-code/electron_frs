@@ -198,7 +198,17 @@ async def filter_faces(
     face_type: Optional[str] = Query(None, description="Filter by face type: known or unknown")
 ):
     """Filter faces by name, date range, and camera."""
-    name_filter = name.lower().strip() if name else None
+    return await filter_faces_logic(request, name, from_date, to_date, camera, face_type)
+
+async def filter_faces_logic(
+    request: Optional[Request] = None,
+    name: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    camera: Optional[str] = "all_cameras",
+    face_type: Optional[str] = None
+):
+    name_filter = name.lower().strip() if name and isinstance(name, str) else None
     from_date_obj = None
     to_date_obj = None
     face_type_filter = None
@@ -328,17 +338,10 @@ async def filter_faces(
                 })
         return faces
 
-    current_user = request.scope.get("user", {})
-    company_id = current_user.get("company_id")
-    
-    # Restrict search base if company_id is provided
-    known_search_base = os.path.join(KNOWN_FACES_DIR, company_id) if company_id else KNOWN_FACES_DIR
-    unknown_search_base = os.path.join(UNKNOWN_FACES_DIR, company_id) if company_id else UNKNOWN_FACES_DIR
-
     matching_faces = []
-    matching_faces.extend(process_directory(known_search_base, "known"))
-    matching_faces.extend(process_directory(unknown_search_base, "unknown"))
-    
+    matching_faces.extend(process_directory(KNOWN_FACES_DIR, "known"))
+    matching_faces.extend(process_directory(UNKNOWN_FACES_DIR, "unknown"))
+
     matching_faces.sort(key=lambda item: item["timestamp"], reverse=True)
     return matching_faces
 
@@ -536,6 +539,12 @@ async def get_attendance(
     target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
 ):
     """Get attendance report for a specific date (Punch In / Punch Out)."""
+    return await get_attendance_logic(request, target_date)
+
+async def get_attendance_logic(
+    request: Request,
+    target_date: Optional[str] = None
+):
     try:
         if not target_date:
             target_date = datetime.now().strftime("%Y-%m-%d")
@@ -661,15 +670,21 @@ async def get_dashboard(
     target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
 ):
     """Simplified dashboard query returning combined stats and attendance."""
+    return await get_dashboard_logic(request, target_date)
+
+async def get_dashboard_logic(
+    request: Request,
+    target_date: Optional[str] = None
+):
     try:
-        if not target_date:
+        if not target_date or not isinstance(target_date, str):
             target_date = datetime.now().strftime("%Y-%m-%d")
         
         # Get stats
-        stats = await get_dashboard_stats(request, target_date)
+        stats = await get_dashboard_stats_logic(request, target_date)
         
         # Get attendance records
-        attendance_data = await get_attendance(request, target_date)
+        attendance_data = await get_attendance_logic(request, target_date)
         records = attendance_data.get("attendance", [])
         
         return {
@@ -687,6 +702,12 @@ async def get_dashboard_stats(
     target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
 ):
     """Get simplified statistics for the dashboard."""
+    return await get_dashboard_stats_logic(request, target_date)
+
+async def get_dashboard_stats_logic(
+    request: Request,
+    target_date: Optional[str] = None
+):
     try:
         if not target_date:
             target_date = datetime.now().strftime("%Y-%m-%d")
@@ -707,7 +728,7 @@ async def get_dashboard_stats(
             total_employees = len(persons)
 
         # 2. Present, Absent, Late (from attendance)
-        attendance_data = await get_attendance(request, target_date)
+        attendance_data = await get_attendance_logic(request, target_date)
         records = attendance_data.get("attendance", [])
         
         present = sum(1 for r in records if r["status"] == "Present")
@@ -733,7 +754,7 @@ async def get_dashboard_stats(
 
         # 4. Recognitions Today (total events for today)
         recognitions_today = 0
-        faces = await filter_faces(request, from_date=target_date, to_date=target_date)
+        faces = await filter_faces_logic(request, from_date=target_date, to_date=target_date)
         recognitions_today = len(faces)
         
         return {
@@ -759,7 +780,7 @@ async def get_weekly_attendance(request: Request):
         day = today - timedelta(days=i)
         day_str = day.strftime("%Y-%m-%d")
         try:
-            data = await get_attendance(request, day_str)
+            data = await get_attendance_logic(request, day_str)
             records = data.get("attendance", [])
             present = sum(1 for r in records if r["status"] == "Present")
             absent = len(records) - present
@@ -812,7 +833,7 @@ async def get_attendance_aggregate(
         while current_date <= end:
             day_str = current_date.strftime("%Y-%m-%d")
             try:
-                daily_data = await get_attendance(request, day_str)
+                daily_data = await get_attendance_logic(request, day_str)
                 for record in daily_data.get("attendance", []):
                     pid = None
                     for dict_pid, pdata in persons.items():
@@ -874,7 +895,7 @@ async def get_department_stats(
     if not target_date:
         target_date = datetime.now().strftime("%Y-%m-%d")
     
-    data = await get_attendance(request, target_date)
+    data = await get_attendance_logic(request, target_date)
     records = data.get("attendance", [])
     
     dept_map = {}
@@ -942,7 +963,7 @@ async def export_attendance(
     from io import StringIO
     from fastapi.responses import StreamingResponse
     
-    data = await get_attendance(request, target_date)
+    data = await get_attendance_logic(request, target_date)
     records = data.get("attendance", [])
     
     output = StringIO()

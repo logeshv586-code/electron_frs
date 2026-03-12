@@ -203,7 +203,7 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 @app.get("/api/gallery/image/{company_id}/{person_name}/{image_name:path}")
-async def get_gallery_image(company_id: str, person_name: str, image_name: str):
+async def get_gallery_image(request: Request, company_id: str, person_name: str, image_name: str):
     """Serve gallery images with proper error handling and fallback"""
     try:
         # Security: Verify company access
@@ -211,8 +211,11 @@ async def get_gallery_image(company_id: str, person_name: str, image_name: str):
         user_company_id = current_user.get("company_id")
         user_role = current_user.get("role")
         
-        if user_role != "SuperAdmin" and user_company_id != company_id:
-            raise HTTPException(status_code=403, detail="Unauthorized to access this company's gallery")
+        # If no user is found in scope or it's an empty dict, we allow access to public gallery paths
+        # (RBACMiddleware already verified it's a public path)
+        if current_user and isinstance(current_user, dict) and "company_id" in current_user:
+            if user_role != "SuperAdmin" and user_company_id != company_id:
+                raise HTTPException(status_code=403, detail="Unauthorized to access this company's gallery")
 
         # Sanitize the inputs to prevent directory traversal
         person_name = person_name.replace('..', '').replace('/', '').replace('\\', '')
@@ -255,6 +258,11 @@ async def get_gallery_image(company_id: str, person_name: str, image_name: str):
         logger.error(f"Error serving gallery image {person_name}/{image_name}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+@app.get("/api/gallery/image/{person_name}/{image_name:path}")
+async def get_gallery_image_legacy(request: Request, person_name: str, image_name: str):
+    """Fallback for 2-parameter legacy gallery URLs"""
+    return await get_gallery_image(request, "default", person_name, image_name)
+
 @app.get("/api/captured/image/{face_type}/{company_id}/{camera}/{person}/{image_name}")
 async def get_captured_image(request: Request, face_type: str, company_id: str, camera: str, person: str, image_name: str):
     """Serve captured face images with proper error handling"""
@@ -264,8 +272,9 @@ async def get_captured_image(request: Request, face_type: str, company_id: str, 
         user_company_id = current_user.get("company_id")
         user_role = current_user.get("role")
         
-        if user_role != "SuperAdmin" and user_company_id != company_id:
-            raise HTTPException(status_code=403, detail="Unauthorized to access this company's data")
+        if current_user and isinstance(current_user, dict) and "company_id" in current_user:
+            if user_role != "SuperAdmin" and user_company_id != company_id:
+                raise HTTPException(status_code=403, detail="Unauthorized to access this company's data")
 
         # Validate face_type
         if face_type not in ['known', 'unknown']:
@@ -339,8 +348,8 @@ async def root():
 async def get_analytics_overview():
     """Get overall analytics overview"""
     try:
-        from event.event_api import filter_faces
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        from event.event_api import filter_faces_logic
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
 
         total_faces = len(all_faces)
         known_faces = sum(1 for f in all_faces if f["type"] == "known")
@@ -366,11 +375,11 @@ async def get_analytics_overview():
 async def get_face_detection_trend(days: int = 7):
     """Get face detection trends over time"""
     try:
-        from event.event_api import filter_faces
+        from event.event_api import filter_faces_logic
         from datetime import datetime, timedelta
         from collections import defaultdict
 
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         cutoff_date = datetime.now() - timedelta(days=days)
         daily_stats = defaultdict(lambda: defaultdict(int))
 
@@ -411,8 +420,8 @@ async def get_confidence_distribution():
         # Confidence is not strictly available in events mapping, returning placeholder distribution
         labels = ['0-0.2', '0.2-0.4', '0.4-0.6', '0.6-0.8', '0.8-1.0']
         
-        from event.event_api import filter_faces
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        from event.event_api import filter_faces_logic
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         
         # Simulate confidence distribution based on known/unknown
         data = [0, 0, 0, 0, 0]
@@ -434,10 +443,10 @@ async def get_confidence_distribution():
 async def get_person_frequency(limit: int = 10):
     """Get most frequently recognized persons"""
     try:
-        from event.event_api import filter_faces
+        from event.event_api import filter_faces_logic
         from collections import defaultdict
         
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         person_freq = defaultdict(int)
 
         for face in all_faces:
@@ -460,11 +469,11 @@ async def get_person_frequency(limit: int = 10):
 async def get_hourly_activity():
     """Get face detection activity by hour of day"""
     try:
-        from event.event_api import filter_faces
+        from event.event_api import filter_faces_logic
         from datetime import datetime
         from collections import defaultdict
         
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         hourly_activity = defaultdict(int)
 
         for face in all_faces:
@@ -491,10 +500,10 @@ async def get_hourly_activity():
 async def get_camera_activity():
     """Get face detection activity by camera/source"""
     try:
-        from event.event_api import filter_faces
+        from event.event_api import filter_faces_logic
         from collections import defaultdict
         
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         camera_activity = defaultdict(int)
 
         for face in all_faces:
@@ -535,11 +544,11 @@ async def get_face_types():
 async def get_persons_list():
     """Get list of all persons with their profile images and basic stats"""
     try:
-        from event.event_api import filter_faces
+        from event.event_api import filter_faces_logic
         from collections import defaultdict
         from datetime import datetime
 
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         persons_data = defaultdict(lambda: {
             "count": 0,
             "avg_confidence": 0.0,
@@ -595,11 +604,11 @@ async def get_persons_list():
 async def get_person_analytics(person_name: str):
     """Get detailed analytics for a specific person"""
     try:
-        from event.event_api import filter_faces
+        from event.event_api import filter_faces_logic
         from datetime import datetime, timedelta
         from collections import defaultdict
 
-        all_faces = await filter_faces(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         person_faces = [f for f in all_faces if f["name"] == person_name and f["type"] == "known"]
 
         if not person_faces:
@@ -701,7 +710,7 @@ def convert_file_path_to_url(file_path: str) -> str:
             if len(parts) >= 2:
                 person_name = parts[0]
                 image_name = parts[-1]
-                return f"{API_BASE_URL}/api/gallery/image/{person_name}/{image_name}"
+                return f"{API_BASE_URL}/api/gallery/image/default/{person_name}/{image_name}"
         
         # Check if it's a captured face (known)
         known_faces_dir = os.path.join(CAPTURED_FACES_DIR, "known")
@@ -740,7 +749,7 @@ def convert_file_path_to_url(file_path: str) -> str:
                 if len(path_segments) >= 2:
                     person = path_segments[0]
                     img = path_segments[-1]
-                    return f"{API_BASE_URL}/api/gallery/image/{person}/{img}"
+                    return f"{API_BASE_URL}/api/gallery/image/default/{person}/{img}"
 
         # Try to detect captured known faces
         if 'captured_faces/known/' in path_str:

@@ -10,6 +10,9 @@ const AnimatedLoginPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotUsername, setForgotUsername] = useState('');
+  const [forgotMessage, setForgotMessage] = useState('');
 
   const { login, error, clearError, logout, setAuthenticated } = useAuthStore();
 
@@ -45,12 +48,7 @@ const AnimatedLoginPage = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // Validation
-    if (!role) {
-      alert('Please select your access level');
-      return;
-    }
-
+    // Validation (Role is now optional for SuperAdmin/Auto-detection)
     if (!username.trim() || !password.trim()) {
       alert('Please enter username and password');
       return;
@@ -66,7 +64,8 @@ const AnimatedLoginPage = () => {
     const minAnimationTime = new Promise(resolve => setTimeout(resolve, 1500));
 
     try {
-      const loginPromise = login(username, password, role, true);
+      // Pass null or empty string if no role is selected, the backend will auto-discover
+      const loginPromise = login(username, password, role || null, true);
       const [result] = await Promise.all([loginPromise, minAnimationTime]);
 
       if (result.success) {
@@ -212,7 +211,6 @@ const AnimatedLoginPage = () => {
                   className="form-input"
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
-                  required
                 >
                   <option value="" disabled hidden>SELECT ROLE</option>
                   <option value="Admin">ADMIN</option>
@@ -284,6 +282,20 @@ const AnimatedLoginPage = () => {
                 </div>
               )}
 
+              <div className="forgot-password-link">
+                <button 
+                  type="button" 
+                  className="link-btn"
+                  onClick={() => {
+                    setIsForgotPassword(true);
+                    setForgotUsername(username);
+                    setForgotMessage('');
+                  }}
+                >
+                  FORGOT PASSWORD?
+                </button>
+              </div>
+
               <div className="form-group submit-group">
                 <button
                   type="submit"
@@ -299,6 +311,56 @@ const AnimatedLoginPage = () => {
                 <p className="login-help-text">SECURE FACE RECOGNITION ACCESS</p>
               </div>
             </form>
+
+            {/* Forgot Password Overlay */}
+            {isForgotPassword && (
+              <div className="forgot-password-overlay">
+                <div className="forgot-password-card">
+                  <h3>RESET PASSWORD</h3>
+                  <p>ENTER YOUR USERNAME TO RECEIVE RESET INSTRUCTIONS</p>
+                  <div className="form-group">
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="USERNAME"
+                      value={forgotUsername}
+                      onChange={(e) => setForgotUsername(e.target.value)}
+                    />
+                  </div>
+                  {forgotMessage && <div className="forgot-status">{forgotMessage}</div>}
+                  <div className="modal-actions">
+                    <button 
+                      className="login-button secondary"
+                      onClick={() => setIsForgotPassword(false)}
+                    >
+                      CANCEL
+                    </button>
+                    <button 
+                      className="login-button"
+                      onClick={async () => {
+                        if (!forgotUsername.trim()) {
+                          alert('Please enter your username');
+                          return;
+                        }
+                        try {
+                          const response = await fetch('/api/auth/forgot-password', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: forgotUsername })
+                          });
+                          const data = await response.json();
+                          setForgotMessage(data.message);
+                        } catch (err) {
+                          setForgotMessage('NETWORK ERROR. PLEASE TRY AGAIN.');
+                        }
+                      }}
+                    >
+                      SEND RESET LINK
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Right Side - Visual/Animation */}

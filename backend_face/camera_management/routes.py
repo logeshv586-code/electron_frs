@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from typing import Optional
 import os
@@ -53,30 +53,40 @@ async def validate_camera(
 
 @router.get("/cameras", response_model=CameraListResponse)
 async def get_cameras(
+    request: Request,
     page: int = 1,
     per_page: int = 6,
     service: EnhancedCameraService = Depends(get_camera_service)
 ):
     """Get paginated list of cameras with collections"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id") if current_user.get("role") != "SuperAdmin" else None
+        
         if page < 1:
             page = 1
         if per_page < 1 or per_page > 50:
             per_page = 6
             
-        return service.get_cameras(page, per_page)
+        return service.get_cameras(page, per_page, company_id=company_id)
     except Exception as e:
         logger.error(f"Error getting cameras: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve cameras")
 
 @router.post("/cameras", response_model=CameraOperationResponse)
 async def create_camera(
-    request: CameraCreateRequest,
+    request_data: CameraCreateRequest,
+    request: Request,
     service: EnhancedCameraService = Depends(get_camera_service)
 ):
     """Create a new camera"""
     try:
-        return service.create_camera(request)
+        current_user = request.scope.get("user", {})
+        # If Admin or Supervisor, force company_id from their account
+        if current_user.get("role") != "SuperAdmin":
+            request_data.company_id = current_user.get("company_id")
+            
+        return service.create_camera(request_data)
     except HTTPException:
         raise
     except Exception as e:
@@ -186,7 +196,7 @@ async def start_camera_stream(
             }
 
         # Start new stream
-        stream_id = stream_service.start_stream(camera_id, camera.rtsp_url, camera.name)
+        stream_id = stream_service.start_stream(camera_id, camera.rtsp_url, camera.name, company_id=camera.company_id)
 
         return {
             "success": True,
@@ -239,7 +249,7 @@ async def get_camera_stream(
         # Get or create stream
         stream_id = stream_service.get_camera_stream(camera_id)
         if not stream_id:
-            stream_id = stream_service.start_stream(camera_id, camera.rtsp_url, camera.name)
+            stream_id = stream_service.start_stream(camera_id, camera.rtsp_url, camera.name, company_id=camera.company_id)
 
         # Return MJPEG stream
         return StreamingResponse(

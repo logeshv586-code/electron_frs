@@ -7,6 +7,7 @@ import threading
 AUTH_DATA_DIR = Path("data/auth")
 USERS_FILE = AUTH_DATA_DIR / "users.json"
 SETTINGS_FILE = AUTH_DATA_DIR / "settings.json"
+COMPANIES_FILE = AUTH_DATA_DIR / "companies.json"
 CAMERAS_FILE = Path("data/cameras.json")
 
 _lock = threading.Lock()
@@ -51,6 +52,12 @@ def get_cameras() -> Dict[str, Any]:
 
 def save_cameras(cameras: Dict[str, Any]):
     atomic_write_json(CAMERAS_FILE, cameras)
+
+def get_companies() -> Dict[str, Any]:
+    return load_json(COMPANIES_FILE, {})
+
+def save_companies(companies: Dict[str, Any]):
+    atomic_write_json(COMPANIES_FILE, companies)
 
 def _tokens_file() -> Path:
     return AUTH_DATA_DIR / "tokens.json"

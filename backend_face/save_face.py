@@ -37,13 +37,16 @@ def sanitize_label(label: str) -> str:
         return "unknown"
     return label
 
-def ensure_dirs_for_label(label: str, camera_name: Optional[str] = None) -> Path:
+def ensure_dirs_for_label(label: str, camera_name: Optional[str] = None, company_id: Optional[str] = None) -> Path:
     label_s = sanitize_label(label)
     cam = sanitize_label(camera_name) if camera_name else "default"
+    comp = sanitize_label(company_id) if company_id else "default"
+    
     if label_s == "unknown":
-        dir_path = BASE_DIR / UNKNOWN_DIRNAME / cam
+        dir_path = BASE_DIR / UNKNOWN_DIRNAME / comp / cam
     else:
-        dir_path = BASE_DIR / KNOWN_DIRNAME / cam / label_s
+        dir_path = BASE_DIR / KNOWN_DIRNAME / comp / cam / label_s
+        
     dir_path.mkdir(parents=True, exist_ok=True)
     return dir_path
 
@@ -149,7 +152,8 @@ def save_face_image(
     jpeg_quality: int = 95,
     stream_id: Optional[str] = None,  # Optional stream_id to access frame buffer for sharp capture
     prefer_png: bool = False,  # Save PNG instead of JPEG when True
-    camera_name: Optional[str] = None  # Camera/stream name for directory organization
+    camera_name: Optional[str] = None,  # Camera/stream name for directory organization
+    company_id: Optional[str] = None  # Company/tenant ID for data isolation
 ) -> Optional[Path]:
     """
     Robust face saving with auto-detected bbox format, smart padding, and limited upscaling.
@@ -274,7 +278,7 @@ def save_face_image(
         # Save images as captured to maintain original quality
         
         # Save
-        dir_path = ensure_dirs_for_label(label_s, camera_name=camera_name)
+        dir_path = ensure_dirs_for_label(label_s, camera_name=camera_name, company_id=company_id)
         fname = f"{label_s}_{_current_timestamp_str()}.jpg"
         save_path = dir_path / fname
         

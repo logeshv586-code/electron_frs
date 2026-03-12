@@ -57,12 +57,14 @@ class EnhancedCamera(BaseModel):
     last_seen: Optional[datetime] = None
     error_count: int = 0
     is_active: bool = False
+    company_id: Optional[str] = None
 
 class CameraCreateRequest(BaseModel):
     name: str
     rtsp_url: str
     collection_id: Optional[str] = None
     location: Optional[str] = None
+    company_id: Optional[str] = None
 
     @validator('rtsp_url')
     def validate_rtsp_url(cls, v):

@@ -33,31 +33,18 @@
     "created_at": "2024-01-01T00:00:00Z",
     "assigned_cameras": [],
     "assigned_menus": [
-      "dashboard",
       "users",
-      "gallery",
+      "registration",
+      "camera",
       "events",
-      "registration"
+      "dashboard",
+      "gallery",
+      "video",
+      "stream-viewer"
     ],
     "max_users_limit": 9,
     "max_cameras_limit": 5,
     "license_start_date": "2026-02-13T12:53:19.127Z",
     "license_end_date": "2028-02-13T12:53:19.127Z"
-  },
-  "super1": {
-    "username": "super1",
-    "hashed_password": "$2b$12$46duuOedRm2Y7Qxg.wr3x.d8LY5NXMKPJ1RE3mCrixp665fIjDHY.",
-    "role": "Supervisor",
-    "email": "super@gmail.com",
-    "is_active": true,
-    "created_by": "admin1",
-    "created_at": "2024-01-01T00:00:00Z",
-    "assigned_cameras": [],
-    "assigned_menus": [
-      "stream-viewer",
-      "dashboard"
-    ],
-    "max_users_limit": 0,
-    "max_cameras_limit": 0
   }
 }

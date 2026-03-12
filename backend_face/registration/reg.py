@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import Dict, List, Optional
@@ -9,6 +9,9 @@ import pandas as pd
 from pydantic import BaseModel
 import shutil
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 try:
     import face_recognition
 except Exception as e:
@@ -87,6 +90,7 @@ class PersonDetails(BaseModel):
     status: str | None = "Active"
     age: str | None = None  # Optional
     gender: str | None = None  # Optional
+    created_by: str | None = "system"
 
 class RegistrationResponse(BaseModel):
     status: str
@@ -129,8 +133,8 @@ class MetadataManager:
             return False
 
     @staticmethod
-    def get_statistics():
-        """Get registration statistics"""
+    def get_statistics(company_id: Optional[str] = None):
+        """Get registration statistics filtered by company"""
         try:
             if os.path.exists(METADATA_FILE):
                 with open(METADATA_FILE, 'r') as f:
@@ -154,6 +158,10 @@ class MetadataManager:
                 if k == "persons": continue
                 if isinstance(v, dict) and 'name' in v:
                     persons[k] = v
+        
+        # Filter by company_id
+        if company_id:
+            persons = {k: v for k, v in persons.items() if v.get("company_id") == company_id}
         
         # Count by category
         categories = {}
@@ -186,11 +194,12 @@ class MetadataManager:
         }
 
 # Helper functions
-def is_face_already_registered(image_input) -> bool:
+def is_face_already_registered(image_input, company_id: Optional[str] = None) -> bool:
     """
     Check if the face is already registered
     Args:
         image_input: Can be either a file path (str) or a numpy array (RGB image)
+        company_id: Optional company ID to scope the duplicate check
     """
     try:
         # Handle input image
@@ -206,9 +215,19 @@ def is_face_already_registered(image_input) -> bool:
 
         new_face_encoding = new_face_encoding[0]
 
+        if company_id:
+            # Multi-tenant structure: data/gallery/{company_id}/{person_name}
+            tenant_gallery = os.path.join(GALLERY_DIR, company_id)
+            if not os.path.exists(tenant_gallery):
+                return False
+            search_dirs = [os.path.join(tenant_gallery, d) for d in os.listdir(tenant_gallery) if os.path.isdir(os.path.join(tenant_gallery, d))]
+        else:
+            # Fallback to global search in DATA_DIR (legacy)
+            search_dirs = [os.path.join(DATA_DIR, d) for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))]
+
         # Check each person's directory
-        for person_name in os.listdir(DATA_DIR):
-            person_dir = os.path.join(DATA_DIR, person_name)
+        for person_dir in search_dirs:
+            # Skip non-directory entries
             if not os.path.isdir(person_dir):
                 continue
 
@@ -674,6 +693,7 @@ class FaceProcessor:
 # Endpoints
 @app.post("/register/single", response_model=RegistrationResponse)
 async def register_single(
+    request: Request,
     image: UploadFile = File(...),
     name: str = Form(...),
     age: str | None = Form(None),
@@ -722,16 +742,33 @@ async def register_single(
         
         # Convert to format needed by face_recognition for duplicate check
         rgb_face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-        if is_face_already_registered(rgb_face):
+        
+        # Get creator and company from scope
+        current_user = request.scope.get("user", {})
+        creator = current_user.get("username", "system")
+        company_id = current_user.get("company_id")
+
+        if is_face_already_registered(rgb_face, company_id=company_id):
             raise HTTPException(
                 status_code=400,
                 detail="This face is already registered in the system."
             )
 
+        # Get creator and company from scope
+        current_user = request.scope.get("user", {})
+        creator = current_user.get("username", "system")
+        company_id = current_user.get("company_id")
+
         # Get unique name and create directories
         unique_name = get_unique_name(name.lower())
         person_dir = os.path.join(DATA_DIR, unique_name)
-        gallery_dir = os.path.join(GALLERY_DIR, unique_name)
+        
+        # Multi-tenant gallery structure
+        if company_id:
+            gallery_dir = os.path.join(GALLERY_DIR, company_id, unique_name)
+        else:
+            gallery_dir = os.path.join(GALLERY_DIR, unique_name)
+            
         os.makedirs(gallery_dir, exist_ok=True)
 
         # Generate augmented images
@@ -793,7 +830,9 @@ async def register_single(
             "age_range": age_range,
             "age_source": age_source,
             "predicted_age": predicted_age if isinstance(predicted_age, int) else None,
-            "predicted_gender": predicted_gender
+            "predicted_gender": predicted_gender,
+            "created_by": creator,
+            "company_id": company_id
         }
 
         with open(METADATA_FILE, 'w') as f:
@@ -817,11 +856,15 @@ async def register_single(
 
 @app.post("/register/bulk", response_model=List[RegistrationResponse])
 async def register_bulk(
+    request: Request,
     excel_file: UploadFile = File(...),
     image_files: List[UploadFile] = File(...),
 ):
     """Register multiple people using Excel file and uploaded image files"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        creator = current_user.get("username", "system")
         # Create temporary directory for processing
         temp_dir = os.path.join(DATA_DIR, "temp_bulk")
         os.makedirs(temp_dir, exist_ok=True)
@@ -909,7 +952,12 @@ async def register_bulk(
                             age_int = int(age_str)
                         except Exception:
                             age_int = None
-                gallery_face_path = os.path.join(GALLERY_DIR, safe_name, "1.jpg")
+                if company_id:
+                    gallery_person_dir = os.path.join(GALLERY_DIR, company_id, safe_name)
+                else:
+                    gallery_person_dir = os.path.join(GALLERY_DIR, safe_name)
+                
+                gallery_face_path = os.path.join(gallery_person_dir, "1.jpg")
                 predicted_age = None
                 predicted_gender = None
                 if age_int is None or not result['details'].get('gender', '').strip():
@@ -948,11 +996,17 @@ async def register_bulk(
                     'age_range': age_range,
                     'age_source': age_source,
                     'predicted_age': predicted_age if isinstance(predicted_age, int) else None,
-                    'predicted_gender': predicted_gender
+                    'predicted_gender': predicted_gender,
+                    'company_id': company_id,
+                    'created_by': creator
                 }
 
                 # Create gallery directory and copy original image
-                gallery_person_dir = os.path.join(GALLERY_DIR, safe_name)
+                if company_id:
+                    gallery_person_dir = os.path.join(GALLERY_DIR, company_id, safe_name)
+                else:
+                    gallery_person_dir = os.path.join(GALLERY_DIR, safe_name)
+                    
                 os.makedirs(gallery_person_dir, exist_ok=True)
                 
                 # Copy the first augmented image as original.jpg in gallery
@@ -991,11 +1045,23 @@ async def register_bulk(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/registered-faces", response_model=Dict)
-async def get_registered_faces():
+async def get_registered_faces(request: Request):
     """Get list of all registered faces"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        
         with open(METADATA_FILE, 'r') as f:
             person_data = json.load(f)
+        
+        # Filter by company_id
+        if company_id:
+            person_data = {k: v for k, v in person_data.items() if v.get("company_id") == company_id}
+        elif current_user.get("role") != "SuperAdmin":
+            # Fallback for old data or missing company_id
+            username = current_user.get("username")
+            person_data = {k: v for k, v in person_data.items() if v.get("created_by") == username}
+            
         return person_data
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -1003,7 +1069,7 @@ async def get_registered_faces():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/gallery", response_model=Dict)
-async def get_gallery(name: Optional[str] = None, category: Optional[str] = None):
+async def get_gallery(request: Request, name: Optional[str] = None, category: Optional[str] = None):
     """Get gallery data with image filenames, optionally filtered by name and category"""
     try:
         persons = {}
@@ -1023,6 +1089,15 @@ async def get_gallery(name: Optional[str] = None, category: Optional[str] = None
                         continue
                     if isinstance(v, dict) and 'name' in v:
                         persons[k] = v
+            
+            # Filter by company_id
+            current_user = request.scope.get("user", {})
+            company_id = current_user.get("company_id")
+            if company_id:
+                persons = {k: v for k, v in persons.items() if v.get("company_id") == company_id}
+            elif current_user.get("role") != "SuperAdmin":
+                username = current_user.get("username")
+                persons = {k: v for k, v in persons.items() if v.get("created_by") == username}
         else:
             if os.path.exists(GALLERY_DIR):
                 for entry in os.scandir(GALLERY_DIR):
@@ -1078,7 +1153,12 @@ async def get_gallery(name: Optional[str] = None, category: Optional[str] = None
                         image_filename = "original.jpg"
 
             processed_data[person_id]['image_filename'] = image_filename
-            processed_data[person_id]['image_url'] = f"/api/gallery/image/{person_id}/{image_filename}"
+            
+            # Construct tenant-aware image URL
+            if company_id:
+                processed_data[person_id]['image_url'] = f"/api/gallery/image/{company_id}/{person_id}/{image_filename}"
+            else:
+                processed_data[person_id]['image_url'] = f"/api/gallery/image/{person_id}/{image_filename}"
 
         return processed_data
     except Exception as e:
@@ -1102,14 +1182,13 @@ async def save_metadata(metadata: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/metadata/person/{person_id}")
-async def get_person_metadata(person_id: str):
-    """Get person's metadata"""
+@app.get("/statistics")
+async def get_statistics(request: Request):
+    """Get registration statistics filtered by company"""
     try:
-        metadata = MetadataManager.load_metadata()
-        if person_id in metadata.get("persons", {}):
-            return metadata["persons"][person_id]
-        raise HTTPException(status_code=404, detail="Person not found")
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        return MetadataManager.get_statistics(company_id=company_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1160,12 +1239,95 @@ async def delete_person_metadata(person_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/metadata/statistics")
-async def get_metadata_statistics():
+async def get_metadata_statistics(request: Request):
     """Get registration statistics"""
     try:
-        return MetadataManager.get_statistics()
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        return MetadataManager.get_statistics(company_id=company_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/system/reset")
+async def system_reset(request: Request):
+    """Reset the entire system data (Only for SuperAdmin)"""
+    current_user = request.scope.get("user", {})
+    if current_user.get("role") != "SuperAdmin":
+        raise HTTPException(status_code=403, detail="Only SuperAdmin can perform a system reset")
+    
+    try:
+        logger.info(f"System reset initiated by SuperAdmin: {current_user.get('username')}")
+        
+        # 1. Clear Gallery directory
+        if os.path.exists(GALLERY_DIR):
+            for item in os.listdir(GALLERY_DIR):
+                item_path = os.path.join(GALLERY_DIR, item)
+                try:
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                    else:
+                        os.remove(item_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove {item_path}: {e}")
+        
+        # 2. Clear Registration data directories in DATA_DIR
+        for item in os.listdir(DATA_DIR):
+            item_path = os.path.join(DATA_DIR, item)
+            # Skip gallery, auth, camera_management, and metadata.json (will be reset)
+            if item in ["gallery", "auth", "camera_management", "metadata.json", "embeddings_cache.pkl", "temp_bulk", "logs"]:
+                continue
+            try:
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+                else:
+                    # Skip critical files if any
+                    pass
+            except Exception as e:
+                logger.warning(f"Failed to remove {item_path}: {e}")
+        
+        # 3. Clear temp bulk
+        temp_bulk = os.path.join(DATA_DIR, "temp_bulk")
+        if os.path.exists(temp_bulk):
+            shutil.rmtree(temp_bulk, ignore_errors=True)
+
+        # 4. Reset metadata.json
+        empty_metadata = {
+            "persons": {},
+            "last_updated": datetime.now().isoformat(),
+            "total_registered": 0
+        }
+        with open(METADATA_FILE, 'w') as f:
+            json.dump(empty_metadata, f, indent=4)
+            
+        # 5. Clear embeddings cache
+        embeddings_cache = os.path.join(DATA_DIR, "embeddings_cache.pkl")
+        if os.path.exists(embeddings_cache):
+            try:
+                os.remove(embeddings_cache)
+            except Exception as e:
+                logger.warning(f"Failed to remove {embeddings_cache}: {e}")
+            
+        # 6. Clear captured faces
+        cf_dir = os.path.join(BASE_DIR, "captured_faces")
+        if os.path.exists(cf_dir):
+            for sub in ["known", "unknown"]:
+                sub_dir = os.path.join(cf_dir, sub)
+                if os.path.exists(sub_dir):
+                    for item in os.listdir(sub_dir):
+                        item_path = os.path.join(sub_dir, item)
+                        try:
+                            if os.path.isdir(item_path):
+                                shutil.rmtree(item_path)
+                            else:
+                                os.remove(item_path)
+                        except Exception as e:
+                            logger.warning(f"Failed to remove {item_path}: {e}")
+
+        logger.info("System data reset completed successfully")
+        return {"status": "success", "message": "System data cleared successfully"}
+    except Exception as e:
+        logger.error(f"Error during system reset: {e}")
+        raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
 
 # This app can be mounted in the main application
 

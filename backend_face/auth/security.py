@@ -29,9 +29,10 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
         username: str = payload.get("sub")
         role: str = payload.get("role")
+        company_id: Optional[str] = payload.get("company_id")
         if username is None or role is None:
             return None
-        return {"username": username, "role": role}
+        return {"username": username, "role": role, "company_id": company_id}
     except jwt.PyJWTError:
         return None
 

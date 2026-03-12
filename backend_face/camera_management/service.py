@@ -191,6 +191,7 @@ class EnhancedCameraService:
                 status="inactive",
                 created_at=datetime.now(),
                 error_count=0,
+                company_id=request.company_id,
                 is_active=False
             )
             
@@ -210,10 +211,15 @@ class EnhancedCameraService:
             logger.error(f"Error creating camera: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create camera: {str(e)}")
     
-    def get_cameras(self, page: int = 1, per_page: int = 6) -> CameraListResponse:
+    def get_cameras(self, page: int = 1, per_page: int = 6, company_id: Optional[str] = None) -> CameraListResponse:
         """Get paginated list of cameras with collections"""
         try:
             cameras = self._load_cameras()
+            
+            # Filter by company_id if provided
+            if company_id:
+                cameras = [c for c in cameras if c.company_id == company_id]
+            
             collections = self._load_collections()
             
             # Calculate pagination

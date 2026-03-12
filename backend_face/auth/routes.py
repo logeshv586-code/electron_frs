@@ -37,6 +37,7 @@ class UserResponse(BaseModel):
     assigned_menus: list
     max_users_limit: Optional[int] = 0
     max_cameras_limit: Optional[int] = 0
+    company_id: Optional[str] = None
     license_start_date: Optional[str] = None
     license_end_date: Optional[str] = None
 
@@ -66,8 +67,13 @@ async def login(request: LoginRequest):
                 raise HTTPException(status_code=403, detail="License expired. Contact SuperAdmin.")
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token_data = {
+        "sub": auth_user["username"], 
+        "role": auth_user["role"],
+        "company_id": auth_user.get("company_id")
+    }
     access_token = create_access_token(
-        data={"sub": auth_user["username"], "role": auth_user["role"]},
+        data=token_data,
         expires_delta=access_token_expires
     )
     
@@ -76,6 +82,7 @@ async def login(request: LoginRequest):
     tokens[access_token] = {
         "username": auth_user["username"],
         "role": auth_user["role"],
+        "company_id": auth_user.get("company_id"),
         "issued_at": int(datetime.now(timezone.utc).timestamp())
     }
     save_tokens(tokens)
@@ -106,6 +113,7 @@ async def get_current_user(request: Request):
         assigned_menus=user.get("assigned_menus", user.get("menus", [])),
         max_users_limit=user.get("max_users_limit", 0),
         max_cameras_limit=user.get("max_cameras_limit", 0),
+        company_id=user.get("company_id"),
         license_start_date=user.get("license_start_date"),
         license_end_date=user.get("license_end_date")
     )

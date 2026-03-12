@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Request
 from pydantic import BaseModel
 import os
 import shutil
@@ -22,24 +22,29 @@ def convert_file_path_to_url(file_path: str) -> str:
             relative_path = os.path.relpath(normalized_path, known_root)
             parts = relative_path.split(os.sep)
             image_name = parts[-1]
+            if len(parts) >= 4:
+                company_id = parts[0]
+                camera_name = parts[1]
+                person_name = parts[2]
+                return f"/api/captured/image/known/{company_id}/{camera_name}/{person_name}/{image_name}"
             if len(parts) >= 3:
                 camera_name = parts[0]
                 person_name = parts[1]
-                return f"/api/captured/image/known/{camera_name}/{person_name}/{image_name}"
-            if len(parts) >= 2:
-                person_name = parts[-2]
-                return f"/api/captured/image/known/default/{person_name}/{image_name}"
-            return f"/api/captured/image/known/default/default/{image_name}"
+                return f"/api/captured/image/known/default/{camera_name}/{person_name}/{image_name}"
+            return f"/api/captured/image/known/default/default/default/{image_name}"
 
         if normalized_path.startswith(unknown_root):
             relative_path = os.path.relpath(normalized_path, unknown_root)
             parts = relative_path.split(os.sep)
             image_name = parts[-1]
-            if len(parts) >= 2:
+            if len(parts) >= 3:
+                company_id = parts[0]
+                camera_name = parts[1]
+                return f"/api/captured/image/unknown/{company_id}/{camera_name}/unknown/{image_name}"
+            elif len(parts) >= 2:
                 camera_name = parts[0]
-            else:
-                camera_name = "default"
-            return f"/api/captured/image/unknown/{camera_name}/unknown/{image_name}"
+                return f"/api/captured/image/unknown/default/{camera_name}/unknown/{image_name}"
+            return f"/api/captured/image/unknown/default/default/unknown/{image_name}"
 
         # Robust fallback for cross-platform paths (e.g. Windows paths on Linux)
         path_str = file_path.replace('\\', '/')
@@ -157,8 +162,10 @@ async def add_unknown_face(event: FaceEvent):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/cameras")
-async def get_cameras():
+async def get_cameras(request: Request):
     """Get list of available cameras from both known and unknown directories."""
+    current_user = request.scope.get("user", {})
+    # For now, we return all cameras, but could be restricted here as well if cameras were tagged
     cameras = set()
     
     # Get cameras from known faces directory
@@ -183,6 +190,7 @@ async def get_cameras():
 
 @router.get("/filter")
 async def filter_faces(
+    request: Request,
     name: Optional[str] = Query(None, description="Filter by name"),
     from_date: Optional[str] = Query(None, description="Start date in YYYY-MM-DD format"),
     to_date: Optional[str] = Query(None, description="End date in YYYY-MM-DD format"),
@@ -320,9 +328,16 @@ async def filter_faces(
                 })
         return faces
 
+    current_user = request.scope.get("user", {})
+    company_id = current_user.get("company_id")
+    
+    # Restrict search base if company_id is provided
+    known_search_base = os.path.join(KNOWN_FACES_DIR, company_id) if company_id else KNOWN_FACES_DIR
+    unknown_search_base = os.path.join(UNKNOWN_FACES_DIR, company_id) if company_id else UNKNOWN_FACES_DIR
+
     matching_faces = []
-    matching_faces.extend(process_directory(KNOWN_FACES_DIR, "known"))
-    matching_faces.extend(process_directory(UNKNOWN_FACES_DIR, "unknown"))
+    matching_faces.extend(process_directory(known_search_base, "known"))
+    matching_faces.extend(process_directory(unknown_search_base, "unknown"))
     
     matching_faces.sort(key=lambda item: item["timestamp"], reverse=True)
     return matching_faces
@@ -517,6 +532,7 @@ def get_metadata():
 
 @router.get("/attendance")
 async def get_attendance(
+    request: Request,
     target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
 ):
     """Get attendance report for a specific date (Punch In / Punch Out)."""
@@ -528,6 +544,7 @@ async def get_attendance(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
+    current_user = request.scope.get("user", {})
     metadata = get_metadata()
     persons = {}
     if "persons" in metadata:
@@ -536,6 +553,11 @@ async def get_attendance(
         for k, v in metadata.items():
             if k != "persons" and isinstance(v, dict) and 'name' in v:
                 persons[k] = v
+
+    # SaaS Filter: Only show employees created by this user (if not SuperAdmin)
+    if current_user.get("role") != "SuperAdmin":
+        username = current_user.get("username")
+        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
 
     # Build attendance dictionary
     attendance_records = {}
@@ -575,8 +597,14 @@ async def get_attendance(
     LATE_THRESHOLD_MINUTE = 30
 
     # Scan KNOWN_FACES_DIR
-    if os.path.exists(KNOWN_FACES_DIR):
-        for root_dir, _, files in os.walk(KNOWN_FACES_DIR):
+    current_user = request.scope.get("user", {})
+    company_id = current_user.get("company_id")
+    
+    # Restrict search base if company_id is provided
+    known_search_base = os.path.join(KNOWN_FACES_DIR, company_id) if company_id else KNOWN_FACES_DIR
+
+    if os.path.exists(known_search_base):
+        for root_dir, _, files in os.walk(known_search_base):
             for face_file in files:
                 if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
@@ -627,41 +655,102 @@ async def get_attendance(
 
     return {"date": target_date, "attendance": result_list}
 
-@router.get("/dashboard-stats")
-async def get_dashboard_stats(
+@router.get("/dashboard")
+async def get_dashboard(
+    request: Request,
     target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
 ):
-    """Get statistics for the dashboard."""
+    """Simplified dashboard query returning combined stats and attendance."""
     try:
         if not target_date:
             target_date = datetime.now().strftime("%Y-%m-%d")
         
-        attendance_data = await get_attendance(target_date)
-        records = attendance_data.get("attendance", [])
+        # Get stats
+        stats = await get_dashboard_stats(request, target_date)
         
-        total_users = len(records)
-        present = sum(1 for r in records if r["status"] == "Present")
-        absent = total_users - present
-        late = sum(1 for r in records if r.get("is_late", False))
+        # Get attendance records
+        attendance_data = await get_attendance(request, target_date)
+        records = attendance_data.get("attendance", [])
         
         return {
             "date": target_date,
-            "total_users": total_users,
-            "present": present,
-            "not_marked": absent,
+            "stats": stats,
+            "attendance": records
+        }
+    except Exception as e:
+        logger.error(f"Error getting dashboard data: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/dashboard-stats")
+async def get_dashboard_stats(
+    request: Request,
+    target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
+):
+    """Get simplified statistics for the dashboard."""
+    try:
+        if not target_date:
+            target_date = datetime.now().strftime("%Y-%m-%d")
+        
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        
+        # 1. Total Employees (from registration)
+        # We need to call the registration service or metadata directly
+        metadata = get_metadata()
+        persons = metadata.get("persons", metadata)
+        if company_id:
+            total_employees = sum(1 for p in persons.values() if p.get("company_id") == company_id)
+        elif current_user.get("role") != "SuperAdmin":
+            username = current_user.get("username")
+            total_employees = sum(1 for p in persons.values() if p.get("created_by") == username)
+        else:
+            total_employees = len(persons)
+
+        # 2. Present, Absent, Late (from attendance)
+        attendance_data = await get_attendance(request, target_date)
+        records = attendance_data.get("attendance", [])
+        
+        present = sum(1 for r in records if r["status"] == "Present")
+        absent = total_employees - present
+        late = sum(1 for r in records if r.get("is_late", False))
+        
+        # 3. Cameras Active
+        # For now, count cameras from data/camera_management/cameras.json that match company (if possible)
+        # Or just return a count from the data directory
+        cameras_active = 0
+        try:
+            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            cameras_file = os.path.join(backend_dir, "data", "camera_management", "cameras.json")
+            if os.path.exists(cameras_file):
+                with open(cameras_file, 'r') as f:
+                    cameras = json.load(f)
+                    if company_id:
+                        cameras_active = sum(1 for c in cameras if c.get("company_id") == company_id and c.get("status") == "active")
+                    else:
+                        cameras_active = sum(1 for c in cameras if c.get("status") == "active")
+        except Exception as e:
+            logger.warning(f"Error counting active cameras: {e}")
+
+        # 4. Recognitions Today (total events for today)
+        recognitions_today = 0
+        faces = await filter_faces(request, from_date=target_date, to_date=target_date)
+        recognitions_today = len(faces)
+        
+        return {
+            "date": target_date,
+            "present_today": present,
+            "absent": absent,
             "late": late,
-            "half_day": 0,
-            "on_duty": 0,
-            "leave": 0,
-            "weekoff": 0,
-            "wfh": 0
+            "total_employees": total_employees,
+            "cameras_active": cameras_active,
+            "recognitions_today": recognitions_today
         }
     except Exception as e:
         logger.error(f"Error getting dashboard stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/attendance/weekly")
-async def get_weekly_attendance():
+async def get_weekly_attendance(request: Request):
     """Get attendance summary for the last 7 days."""
     from datetime import timedelta
     result = []
@@ -670,7 +759,7 @@ async def get_weekly_attendance():
         day = today - timedelta(days=i)
         day_str = day.strftime("%Y-%m-%d")
         try:
-            data = await get_attendance(day_str)
+            data = await get_attendance(request, day_str)
             records = data.get("attendance", [])
             present = sum(1 for r in records if r["status"] == "Present")
             absent = len(records) - present
@@ -689,6 +778,7 @@ async def get_weekly_attendance():
 
 @router.get("/attendance/aggregate")
 async def get_attendance_aggregate(
+    request: Request,
     start_date: str = Query(..., description="Start date in YYYY-MM-DD format"),
     end_date: str = Query(..., description="End date in YYYY-MM-DD format")
 ):
@@ -722,7 +812,7 @@ async def get_attendance_aggregate(
         while current_date <= end:
             day_str = current_date.strftime("%Y-%m-%d")
             try:
-                daily_data = await get_attendance(day_str)
+                daily_data = await get_attendance(request, day_str)
                 for record in daily_data.get("attendance", []):
                     pid = None
                     for dict_pid, pdata in persons.items():
@@ -777,13 +867,14 @@ async def get_attendance_aggregate(
 
 @router.get("/attendance/department-stats")
 async def get_department_stats(
+    request: Request,
     target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
 ):
     """Get attendance stats grouped by department."""
     if not target_date:
         target_date = datetime.now().strftime("%Y-%m-%d")
     
-    data = await get_attendance(target_date)
+    data = await get_attendance(request, target_date)
     records = data.get("attendance", [])
     
     dept_map = {}
@@ -800,14 +891,20 @@ async def get_department_stats(
     return {"date": target_date, "departments": dept_map}
 
 @router.get("/employees/export")
-async def export_employees():
+async def export_employees(request: Request):
     """Export employee list as CSV."""
     import csv
     from io import StringIO
     from fastapi.responses import StreamingResponse
     
+    current_user = request.scope.get("user", {})
     metadata = get_metadata()
     persons = metadata.get("persons", metadata)
+    
+    # SaaS Filter
+    if current_user.get("role") != "SuperAdmin":
+        username = current_user.get("username")
+        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
     
     output = StringIO()
     writer = csv.writer(output)
@@ -833,5 +930,44 @@ async def export_employees():
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=employees_export.csv"}
+    )
+
+@router.get("/attendance/export")
+async def export_attendance(
+    request: Request,
+    target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
+):
+    """Export attendance report for a specific date as CSV."""
+    import csv
+    from io import StringIO
+    from fastapi.responses import StreamingResponse
+    
+    data = await get_attendance(request, target_date)
+    records = data.get("attendance", [])
+    
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["S.No", "Emp ID", "Name", "Department", "Designation", "Status", "Punch In", "Punch Out", "Working Hours", "Late"])
+    
+    for r in records:
+        writer.writerow([
+            r.get("s_no", ""),
+            r.get("emp_id", ""),
+            r.get("name", ""),
+            r.get("department", ""),
+            r.get("designation", ""),
+            r.get("status", ""),
+            r.get("punch_in", ""),
+            r.get("punch_out", ""),
+            r.get("working_hours", ""),
+            "Yes" if r.get("is_late") else "No"
+        ])
+    
+    output.seek(0)
+    filename = f"attendance_report_{target_date or datetime.now().strftime('%Y-%m-%d')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 

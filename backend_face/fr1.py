@@ -8,7 +8,7 @@ Replaces face_recognition's detector with insightface for better tiny/long-dista
 import os
 import glob
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import cv2
 import numpy as np
@@ -44,13 +44,15 @@ IGNORE_FOLDERS = {
 # --------------------------------------------------
 
 
-def load_known_faces(data_dir: str) -> Tuple[List[np.ndarray], List[str]]:
+def load_known_faces(data_dir: str, company_id: Optional[str] = None) -> Tuple[List[np.ndarray], List[str]]:
     import pickle
     
     known_encodings: List[np.ndarray] = []
     known_names: List[str] = []
     
-    cache_path = os.path.join(data_dir, "embeddings_cache.pkl")
+    # Use company-specific cache file
+    cache_name = f"embeddings_cache_{company_id}.pkl" if company_id else "embeddings_cache.pkl"
+    cache_path = os.path.join(data_dir, cache_name)
     cache = {}
     
     # Load existing cache if available
@@ -58,7 +60,7 @@ def load_known_faces(data_dir: str) -> Tuple[List[np.ndarray], List[str]]:
         try:
             with open(cache_path, "rb") as f:
                 cache = pickle.load(f)
-            print(f"[INFO] Loaded {len(cache)} entries from embeddings cache")
+            print(f"[INFO] Loaded {len(cache)} entries from embeddings cache ({company_id or 'global'})")
         except Exception as e:
             print(f"[WARN] Failed to load cache, starting fresh: {e}")
             cache = {}
@@ -66,18 +68,30 @@ def load_known_faces(data_dir: str) -> Tuple[List[np.ndarray], List[str]]:
     if not os.path.isdir(data_dir):
         raise ValueError(f"Data directory does not exist: {data_dir}")
 
+    # Determine which directories to scan
+    # If company_id is provided, we scan data/gallery/<company_id>/*
+    # Otherwise we scan the base data directory (for backward compatibility)
+    scan_dir = data_dir
+    if company_id:
+        gallery_dir = os.path.join(data_dir, "gallery", company_id)
+        if os.path.exists(gallery_dir):
+            scan_dir = gallery_dir
+        else:
+            print(f"[WARN] Gallery directory for company {company_id} not found: {gallery_dir}")
+            return [], []
+
     # Filter out system folders and non-directories
     person_dirs = [
-        d for d in sorted(os.listdir(data_dir)) 
-        if os.path.isdir(os.path.join(data_dir, d)) and d not in IGNORE_FOLDERS
+        d for d in sorted(os.listdir(scan_dir)) 
+        if os.path.isdir(os.path.join(scan_dir, d)) and d not in IGNORE_FOLDERS
     ]
-    print(f"[INFO] Found {len(person_dirs)} person folders in dataset")
+    print(f"[INFO] Found {len(person_dirs)} person folders in {scan_dir}")
 
     current_files = set()
     new_computations = 0
 
     for person in person_dirs:
-        person_path = os.path.join(data_dir, person)
+        person_path = os.path.join(scan_dir, person)
         pattern = os.path.join(person_path, "*")
         files = [f for f in glob.glob(pattern) if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp"))]
         if not files:
@@ -98,12 +112,15 @@ def load_known_faces(data_dir: str) -> Tuple[List[np.ndarray], List[str]]:
 
                 # Cache miss or file modified - compute encoding
                 img = face_recognition.load_image_file(img_path)
+                # Using 'large' model for better accuracy as requested in face_pipeline
                 locations = face_recognition.face_locations(img, model="hog")
                 if not locations:
+                    # try cnn if hog fails and we have GPU? 
+                    # but hog is safer for general loading
                     print(f"[WARN] No face found in {img_path} - skipping image")
                     continue
                 
-                encs = face_recognition.face_encodings(img, known_face_locations=locations, num_jitters=1)
+                encs = face_recognition.face_encodings(img, known_face_locations=locations, num_jitters=1, model='large')
                 if not encs:
                     print(f"[WARN] Could not encode face in {img_path} - skipping")
                     continue

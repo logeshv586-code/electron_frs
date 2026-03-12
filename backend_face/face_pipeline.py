@@ -26,9 +26,11 @@ BEST_QUALITY_RESET_SECONDS = 30.0  # Reset best quality tracking after 30s of no
 # Support for multiple GPUs: maintain separate face_app instances per GPU
 face_apps: Dict[int, Any] = {}  # GPU ID -> FaceAnalysis instance
 face_app = None  # Default/fallback instance
-known_encodings: List[np.ndarray] = []
-known_names: List[str] = []
 available_gpus: List[int] = []  # List of available GPU IDs
+# Multi-tenant embedding cache: company_id -> {'encodings': [], 'names': [], 'last_loaded': float}
+company_embeddings: Dict[str, Dict[str, Any]] = {}
+embedding_lock = threading.Lock()
+data_directory: str = ""
 
 # Person tracking across frames: stream_id -> track_id -> tracking_info
 # tracking_info: {
@@ -170,7 +172,8 @@ def init(data_dir: str, ctx: int = -1, det_size: Tuple[int, int] = (640, 640), u
         det_size: Detection size for InsightFace
         use_dual_gpu: If True, automatically initialize all available GPUs (up to 2)
     """
-    global face_app, face_apps, known_encodings, known_names, available_gpus
+    global face_app, face_apps, available_gpus, data_directory
+    data_directory = data_dir
 
     # Reuse your function from fr1.py
     try:
@@ -179,6 +182,13 @@ def init(data_dir: str, ctx: int = -1, det_size: Tuple[int, int] = (640, 640), u
         raise ImportError("Cannot import load_known_faces from fr1.py") from e
 
     known_encodings, known_names = load_known_faces(data_dir)
+    
+    with embedding_lock:
+        company_embeddings["_global"] = {
+            "encodings": known_encodings,
+            "names": known_names,
+            "last_loaded": time.time()
+        }
 
     # Clear existing instances
     face_apps = {}
@@ -246,6 +256,34 @@ def init(data_dir: str, ctx: int = -1, det_size: Tuple[int, int] = (640, 640), u
             else:
                 raise
 
+
+def load_company_embeddings(company_id: str) -> Dict[str, Any]:
+    """Load embeddings for a specific company and cache them."""
+    global data_directory
+    
+    with embedding_lock:
+        if company_id in company_embeddings:
+            # Check if cache is older than 5 minutes (optional refresh)
+            if time.time() - company_embeddings[company_id]["last_loaded"] < 300:
+                return company_embeddings[company_id]
+
+    try:
+        from fr1 import load_known_faces
+        encs, names = load_known_faces(data_directory, company_id=company_id)
+        
+        entry = {
+            "encodings": encs,
+            "names": names,
+            "last_loaded": time.time()
+        }
+        
+        with embedding_lock:
+            company_embeddings[company_id] = entry
+            
+        return entry
+    except Exception as e:
+        print(f"[ERROR] Failed to load embeddings for company {company_id}: {e}")
+        return {"encodings": [], "names": [], "last_loaded": 0}
 
 def _get_face_app_for_stream(stream_id: Optional[str] = None):
     """Get appropriate face_app instance for a stream (distributes across GPUs)."""
@@ -368,7 +406,7 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
         force_process: Deprecated - all frames are now processed (kept for backward compatibility)
         stream_id: Optional stream ID for frame buffer access and GPU assignment
     """
-    global known_encodings, known_names, person_tracking, track_id_counter
+    global person_tracking, track_id_counter
     
     # Get appropriate face_app instance (distributed across GPUs if multiple available)
     current_face_app = _get_face_app_for_stream(stream_id)
@@ -385,6 +423,27 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
             person_tracking[stream_id] = {}
         if stream_id not in track_id_counter:
             track_id_counter[stream_id] = 0
+            
+    # Get company_id for this stream
+    company_id = None
+    if stream_id:
+        try:
+            from camera_management.streaming import get_stream_manager
+            s_info = get_stream_manager().get_stream_info(stream_id)
+            if s_info:
+                company_id = s_info.get('company_id')
+        except Exception:
+            pass
+            
+    # Get appropriate embeddings for this company
+    if company_id:
+        embeddings = load_company_embeddings(company_id)
+    else:
+        with embedding_lock:
+            embeddings = company_embeddings.get("_global", {"encodings": [], "names": []})
+            
+    current_known_encodings = embeddings.get("encodings", [])
+    current_known_names = embeddings.get("names", [])
     
     # Track frame count and time for cleanup
     current_time = time.time()
@@ -526,10 +585,10 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
         recognized_name = None
         face_encoding = None
         
-        if encs and len(known_encodings) > 0:
+        if encs and len(current_known_encodings) > 0:
             enc = encs[0]
             face_encoding = enc  # Store for tracking
-            distances = face_recognition.face_distance(known_encodings, enc)
+            distances = face_recognition.face_distance(current_known_encodings, enc)
             
             # Multi-match consensus: require multiple encodings to agree on the same person
             # Sort indices by distance (best matches first)
@@ -537,7 +596,7 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
             best_dist = float(distances[sorted_indices[0]])
             
             if best_dist <= TOLERANCE:
-                best_name = known_names[sorted_indices[0]]
+                best_name = current_known_names[sorted_indices[0]]
                 
                 # Count how many of the top-N closest matches agree on the same person
                 top_n = min(5, len(sorted_indices))
@@ -546,11 +605,11 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
                     idx = sorted_indices[i]
                     dist = float(distances[idx])
                     if dist <= TOLERANCE + 0.05:  # Margin for consensus vote counting (max 0.60 distance)
-                        vote_name = known_names[idx]
+                        vote_name = current_known_names[idx]
                         name_votes[vote_name] = name_votes.get(vote_name, 0) + 1
                 
                 # Determine required votes based on how many reference images exist for this person
-                total_references = known_names.count(best_name)
+                total_references = current_known_names.count(best_name)
                 required_votes = min(2, total_references)
 
                 # Require consensus based on available reference images
@@ -654,8 +713,18 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
                         if s_info and 'camera_name' in s_info:
                             camera_name_to_save = s_info['camera_name']
                     except Exception as e:
-                        print(f"Failed to lookup camera_name for {stream_id}: {e}")
+                        print(f"Failed to lookup camera_name/company_id for {stream_id}: {e}")
                 
+                company_id_to_save = None
+                if stream_id:
+                    try:
+                        from camera_management.streaming import get_stream_manager
+                        s_info = get_stream_manager().get_stream_info(stream_id)
+                        if s_info and 'company_id' in s_info:
+                            company_id_to_save = s_info['company_id']
+                    except Exception as e:
+                        print(f"Failed to lookup company_id for {stream_id}: {e}")
+
                 def _save_face_async():
                     try:
                         save_face_image(
@@ -665,7 +734,8 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
                             min_interval=MIN_SAVE_INTERVAL,
                             source="stream",
                             jpeg_quality=95,
-                            camera_name=camera_name_to_save
+                            camera_name=camera_name_to_save,
+                            company_id=company_id_to_save
                         )
                     except Exception as e:
                         print(f"Error saving face in async thread: {e}")

@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional, List
 from .storage import get_users, save_users, get_settings, save_settings
 from .security import get_password_hash, verify_password
 
-def create_user(username: str, password: str, role: str, created_by: str, is_active: bool = True, max_users_limit: int = 0, max_cameras_limit: int = 0, assigned_menus: List[str] = None, license_start_date: Optional[str] = None, license_end_date: Optional[str] = None, email: Optional[str] = None) -> Dict[str, Any]:
+def create_user(username: str, password: str, role: str, created_by: str, is_active: bool = True, max_users_limit: int = 0, max_cameras_limit: int = 0, assigned_menus: List[str] = None, license_start_date: Optional[str] = None, license_end_date: Optional[str] = None, email: Optional[str] = None, company_id: Optional[str] = None) -> Dict[str, Any]:
     users = get_users()
     if username in users:
         raise ValueError("User already exists")
@@ -27,7 +27,8 @@ def create_user(username: str, password: str, role: str, created_by: str, is_act
         "assigned_cameras": [],
         "assigned_menus": assigned_menus if assigned_menus is not None else get_default_menus_for_role(role),
         "max_users_limit": max_users_limit,
-        "max_cameras_limit": max_cameras_limit
+        "max_cameras_limit": max_cameras_limit,
+        "company_id": company_id
     }
     # Apply license period for Admin users if provided
     if role == "Admin":
@@ -47,10 +48,13 @@ def update_user(username: str, updates: Dict[str, Any]) -> Optional[Dict[str, An
         return None
     
     user = users[username]
-    allowed_updates = ["is_active", "assigned_cameras", "assigned_menus", "max_users_limit", "max_cameras_limit", "license_start_date", "license_end_date", "email"]
+    allowed_updates = ["is_active", "assigned_cameras", "assigned_menus", "max_users_limit", "max_cameras_limit", "license_start_date", "license_end_date", "email", "company_id", "password"]
     for key, value in updates.items():
         if key in allowed_updates:
-            user[key] = value
+            if key == "password":
+                user["hashed_password"] = get_password_hash(value)
+            else:
+                user[key] = value
     
     save_users(users)
     return user
@@ -64,8 +68,10 @@ def delete_user(username: str) -> bool:
     save_users(users)
     return True
 
-def list_users() -> List[Dict[str, Any]]:
+def list_users(company_id: Optional[str] = None) -> List[Dict[str, Any]]:
     users = get_users()
+    if company_id:
+        return [u for u in users.values() if u.get("company_id") == company_id]
     return list(users.values())
 
 def get_default_menus_for_role(role: str) -> List[str]:

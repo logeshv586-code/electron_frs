@@ -19,6 +19,7 @@ class CreateUserRequest(BaseModel):
     assigned_menus: Optional[List[str]] = None
     license_start_date: Optional[str] = None
     license_end_date: Optional[str] = None
+    company_id: Optional[str] = None
 
 class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
@@ -29,6 +30,7 @@ class UpdateUserRequest(BaseModel):
     max_cameras_limit: Optional[int] = None
     license_start_date: Optional[str] = None
     license_end_date: Optional[str] = None
+    password: Optional[str] = None
 
 class AssignCamerasRequest(BaseModel):
     camera_ids: List[str]
@@ -67,7 +69,8 @@ async def create_user_endpoint(request: CreateUserRequest, request_obj: Request)
             assigned_menus=request.assigned_menus,
             license_start_date=request.license_start_date,
             license_end_date=request.license_end_date,
-            email=request.email
+            email=request.email,
+            company_id=request.company_id or current_user.get("company_id")
         )
         return {"message": "User created successfully", "user": user}
     except ValueError as e:
@@ -82,9 +85,10 @@ async def list_users_endpoint(request: Request):
     if current_user["role"] not in ["SuperAdmin", "Admin"]:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     
-    users = list_users()
+    # Filter users based on company and role hierarchy
+    company_id = current_user.get("company_id")
+    users = list_users(company_id=company_id)
     
-    # Filter users based on role hierarchy
     if current_user["role"] == "Admin":
         users = [user for user in users if user["role"] in ["Supervisor"]]
     

@@ -56,10 +56,12 @@ def mount_services():
     
     # Mount authentication service
     try:
+        from auth.company_routes import router as company_router
         app.include_router(auth_router, prefix="/api")
         app.include_router(user_router, prefix="/api")
         app.include_router(camera_router, prefix="/api")
-        logger.info("✓ Authentication service mounted")
+        app.include_router(company_router, prefix="/api")
+        logger.info("✓ Authentication and Company services mounted")
     except Exception as e:
         logger.error(f"✗ Failed to mount authentication service: {e}")
 
@@ -67,9 +69,9 @@ def mount_services():
     try:
         from event.event_api import router as event_router
         app.include_router(event_router, prefix="/api/events", tags=["Events"])
-        logger.info("? Event service mounted")
+        logger.info("✓ Event service mounted")
     except Exception as e:
-        logger.error(f"? Failed to mount event service: {e}")
+        logger.error(f"✗ Failed to mount event service: {e}")
 
     # Old camera service removed - using enhanced camera management instead
     # Add a basic status endpoint
@@ -86,25 +88,25 @@ def mount_services():
     try:
         from registration.reg import app as registration_app
         app.mount("/api/registration", registration_app)
-        logger.info("? Registration service mounted")
+        logger.info("✓ Registration service mounted")
     except Exception as e:
-        logger.error(f"? Failed to mount registration service: {e}")
+        logger.error(f"✗ Failed to mount registration service: {e}")
 
     # Mount enhanced camera management service
     try:
         from camera_management.routes import router as camera_management_router
         app.include_router(camera_management_router)
-        logger.info("? Enhanced camera management service mounted")
+        logger.info("✓ Enhanced camera management service mounted")
     except Exception as e:
-        logger.error(f"? Failed to mount enhanced camera management service: {e}")
+        logger.error(f"✗ Failed to mount enhanced camera management service: {e}")
 
     # Mount WebRTC streaming service
     try:
         from webrtc_streaming.routes import router as webrtc_router
         app.include_router(webrtc_router, prefix="/api/webrtc")
-        logger.info("? WebRTC streaming service mounted")
+        logger.info("✓ WebRTC streaming service mounted")
     except Exception as e:
-        logger.error(f"? Failed to mount WebRTC streaming service: {e}")
+        logger.error(f"✗ Failed to mount WebRTC streaming service: {e}")
         logger.info("Continuing with basic camera service only")
 
     # Mount matching service
@@ -113,7 +115,7 @@ def mount_services():
         app.mount("/api/matching", matching_app)
         logger.info("? Matching service mounted")
     except Exception as e:
-        logger.error(f"? Failed to mount matching service: {e}")
+        logger.error(f"✗ Failed to mount matching service: {e}")
 
     # Mount video processing service
     try:
@@ -121,7 +123,7 @@ def mount_services():
         app.mount("/api/video", video_app)
         logger.info("? Video processing service mounted")
     except Exception as e:
-        logger.error(f"? Failed to mount video processing service: {e}")
+        logger.error(f"✗ Failed to mount video processing service: {e}")
         logger.info("Adding basic video endpoints as fallback")
 
         # Add basic video endpoints as fallback
@@ -200,10 +202,18 @@ app.mount("/static/captured", StaticFiles(directory=CAPTURED_FACES_DIR), name="c
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
-@app.get("/api/gallery/image/{person_name}/{image_name:path}")
-async def get_gallery_image(person_name: str, image_name: str):
+@app.get("/api/gallery/image/{company_id}/{person_name}/{image_name:path}")
+async def get_gallery_image(company_id: str, person_name: str, image_name: str):
     """Serve gallery images with proper error handling and fallback"""
     try:
+        # Security: Verify company access
+        current_user = request.scope.get("user", {})
+        user_company_id = current_user.get("company_id")
+        user_role = current_user.get("role")
+        
+        if user_role != "SuperAdmin" and user_company_id != company_id:
+            raise HTTPException(status_code=403, detail="Unauthorized to access this company's gallery")
+
         # Sanitize the inputs to prevent directory traversal
         person_name = person_name.replace('..', '').replace('/', '').replace('\\', '')
         # Extract just the filename from image_name (in case full path is passed)
@@ -211,7 +221,7 @@ async def get_gallery_image(person_name: str, image_name: str):
         image_name = image_name.replace('..', '').replace('/', '').replace('\\', '')
 
         # Construct the image path
-        image_path = os.path.join(GALLERY_DIR, person_name, image_name)
+        image_path = os.path.join(GALLERY_DIR, company_id, person_name, image_name)
 
         # Check if file exists and is within the gallery directory
         if not os.path.exists(image_path):
@@ -219,7 +229,7 @@ async def get_gallery_image(person_name: str, image_name: str):
             fallback_names = ['1.jpg', 'original.jpg']
             if image_name not in fallback_names:
                 for fallback_name in fallback_names:
-                    fallback_path = os.path.join(GALLERY_DIR, person_name, fallback_name)
+                    fallback_path = os.path.join(GALLERY_DIR, company_id, person_name, fallback_name)
                     if os.path.exists(fallback_path):
                         image_path = fallback_path
                         logger.info(f"Using fallback image {fallback_name} for {person_name}/{image_name}")
@@ -245,10 +255,18 @@ async def get_gallery_image(person_name: str, image_name: str):
         logger.error(f"Error serving gallery image {person_name}/{image_name}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/api/captured/image/{face_type}/{camera}/{person}/{image_name}")
-async def get_captured_image(face_type: str, camera: str, person: str, image_name: str):
+@app.get("/api/captured/image/{face_type}/{company_id}/{camera}/{person}/{image_name}")
+async def get_captured_image(request: Request, face_type: str, company_id: str, camera: str, person: str, image_name: str):
     """Serve captured face images with proper error handling"""
     try:
+        # Security: Verify company access
+        current_user = request.scope.get("user", {})
+        user_company_id = current_user.get("company_id")
+        user_role = current_user.get("role")
+        
+        if user_role != "SuperAdmin" and user_company_id != company_id:
+            raise HTTPException(status_code=403, detail="Unauthorized to access this company's data")
+
         # Validate face_type
         if face_type not in ['known', 'unknown']:
             raise HTTPException(status_code=400, detail="Invalid face type. Must be 'known' or 'unknown'")
@@ -260,7 +278,7 @@ async def get_captured_image(face_type: str, camera: str, person: str, image_nam
         image_name = os.path.basename(image_name)
         image_name = image_name.replace('..', '').replace('/', '').replace('\\', '')
 
-        base_dir = os.path.join(CAPTURED_FACES_DIR, face_type)
+        base_dir = os.path.join(CAPTURED_FACES_DIR, face_type, company_id)
         candidates = []
 
         if camera == "default":

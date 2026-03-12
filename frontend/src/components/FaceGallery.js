@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import useAuthStore from '../store/authStore';
 import axios from 'axios';
 import { Search, Grid, List as ListIcon, RefreshCw, Users, UserCheck, Briefcase, Clock } from 'lucide-react';
 import PersonCard from './PersonCard';
@@ -10,6 +11,7 @@ const GALLERY_ENDPOINT = `${API_BASE_URL}/api/registration/gallery`;
 const STATS_ENDPOINT = `${API_BASE_URL}/api/registration/metadata/statistics`;
 
 const FaceGallery = () => {
+  const { user: currentUser } = useAuthStore();
   const [galleryData, setGalleryData] = useState({});
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -291,7 +293,7 @@ const FaceGallery = () => {
                 <PersonCard
                   key={personId}
                   name={personData.name}
-                  photoPath={`${API_BASE_URL}/api/gallery/image/${personId}/${imageFilename}`}
+                  photoPath={personData.image_url ? `${API_BASE_URL}${personData.image_url}` : `${API_BASE_URL}/api/gallery/image/${currentUser?.company_id || 'default'}/${personId}/${imageFilename}`}
                   details={{
                     age: (personData.age_range && personData.age_range !== 'N/A') ? personData.age_range : personData.age,
                     gender: personData.gender,

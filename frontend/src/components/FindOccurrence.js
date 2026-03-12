@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import useAuthStore from '../store/authStore';
 import { Search, Upload, Image as ImageIcon, X, AlertCircle, Loader } from 'lucide-react';
 import FaceCard from './FaceCard';
 import './FindOccurrence.css';
@@ -8,6 +9,7 @@ import { API_BASE_URL as BASE_URL } from '../utils/apiConfig';
 const API_BASE_URL = `${BASE_URL}/api/events`;
 
 const FindOccurrence = () => {
+  const { token } = useAuthStore();
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedImagePath, setSelectedImagePath] = useState('');
   const [matchingFaces, setMatchingFaces] = useState([]);
@@ -49,10 +51,11 @@ const FindOccurrence = () => {
 
       const endpoint = mode === 'known' ? '/match-face' : '/match-face-unknown';
       console.log(`Finding ${mode} matches for image:`, selectedImage.name);
-      
+
       const response = await axios.post(`${API_BASE_URL}${endpoint}`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${token}`
         },
         timeout: 120000, // 2 minutes
         onUploadProgress: (progressEvent) => {
@@ -128,7 +131,7 @@ const FindOccurrence = () => {
           </div>
 
           <div className="search-actions">
-            <button 
+            <button
               className={`btn-search-action ${searchMode === 'known' ? 'primary' : 'secondary'}`}
               onClick={() => findMatches('known')}
               disabled={!selectedImage || loading}
@@ -136,8 +139,8 @@ const FindOccurrence = () => {
               {loading && searchMode === 'known' ? <Loader size={16} className="spin" /> : <Search size={16} />}
               Find Known Matches
             </button>
-            
-            <button 
+
+            <button
               className={`btn-search-action ${searchMode === 'unknown' ? 'primary' : 'secondary'}`}
               onClick={() => findMatches('unknown')}
               disabled={!selectedImage || loading}
@@ -147,7 +150,7 @@ const FindOccurrence = () => {
             </button>
           </div>
         </div>
-        
+
         {error && (
           <div className="error-banner">
             <AlertCircle size={16} />

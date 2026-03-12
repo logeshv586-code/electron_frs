@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
 import axios from 'axios';
+import useAuthStore from '../store/authStore';
 import FaceCard from './FaceCard';
 import './FaceMatching.css';
 
@@ -7,7 +7,7 @@ import { API_BASE_URL as BASE_URL } from '../utils/apiConfig';
 const API_BASE_URL = `${BASE_URL}/api/matching/api/match`;
 
 // Utility function to convert local file paths to API URLs
-const convertImagePathToUrl = (imagePath) => {
+const convertImagePathToUrl = (imagePath, companyId) => {
   if (!imagePath) return '';
 
   try {
@@ -24,7 +24,7 @@ const convertImagePathToUrl = (imagePath) => {
       const imageName = pathParts[dataIndex + 2];
 
       // Return the proper API URL for serving gallery images
-      const fullUrl = `${BASE_URL}/api/gallery/image/${personName}/${imageName}`;
+      const fullUrl = `${BASE_URL}/api/gallery/image/${companyId || 'default'}/${personName}/${imageName}`;
       // console.log('Converted image path to URL:', fullUrl);
       return fullUrl;
     }
@@ -39,6 +39,7 @@ const convertImagePathToUrl = (imagePath) => {
 };
 
 const FaceMatching = () => {
+  const { user, token } = useAuthStore();
   const [activeTab, setActiveTab] = useState('one-to-many');
   const [selectedImage1, setSelectedImage1] = useState(null);
   const [selectedImage2, setSelectedImage2] = useState(null);
@@ -91,6 +92,7 @@ const FaceMatching = () => {
       const response = await axios.post(`${API_BASE_URL}/one-to-many`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${token}`
         },
         timeout: 120000,
         onUploadProgress: (progressEvent) => {
@@ -130,6 +132,7 @@ const FaceMatching = () => {
       const response = await axios.post(`${API_BASE_URL}/one-to-one`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${token}`
         },
         timeout: 60000,
         onUploadProgress: (progressEvent) => {
@@ -154,7 +157,9 @@ const FaceMatching = () => {
     setError(null);
 
     try {
-      const response = await axios.get(`${BASE_URL}/api/matching/api/gallery/stats`);
+      const response = await axios.get(`${BASE_URL}/api/matching/api/gallery/stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       console.log('Gallery stats response:', response.data);
       setGalleryStats(response.data);
       setError(null);
@@ -171,7 +176,9 @@ const FaceMatching = () => {
     setError(null);
 
     try {
-      const response = await axios.post(`${BASE_URL}/api/matching/api/gallery/reload`);
+      const response = await axios.post(`${BASE_URL}/api/matching/api/gallery/reload`, {}, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       console.log('Gallery reload response:', response.data);
       setError('Gallery reloaded successfully!');
 
@@ -252,7 +259,7 @@ const FaceMatching = () => {
               {matchingResults.map((match, index) => (
                 <div key={index} className="match-result">
                   <FaceCard
-                    imagePath={convertImagePathToUrl(match.match_details?.image_path || '')}
+                    imagePath={convertImagePathToUrl(match.match_details?.image_path || '', user?.company_id)}
                     name={match.person_name || 'Unknown'}
                     camera={''}
                     timestamp={''}

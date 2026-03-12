@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import useAuthStore from '../store/authStore';
 import {
     Search,
     Calendar as CalendarIcon,
@@ -17,6 +18,7 @@ import './AttendanceList.css';
 import { API_BASE_URL } from '../utils/apiConfig';
 
 const AttendanceList = () => {
+    const { token } = useAuthStore();
     const [attendance, setAttendance] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -29,8 +31,9 @@ const AttendanceList = () => {
         setLoading(true);
         setError(null);
         try {
-            const response = await axios.get(`${API_BASE_URL}/api/attendance`, {
-                params: { date: selectedDate }
+            const response = await axios.get(`${API_BASE_URL}/api/events/attendance`, {
+                params: { target_date: selectedDate },
+                headers: { 'Authorization': `Bearer ${token}` }
             });
             setAttendance(response.data);
 

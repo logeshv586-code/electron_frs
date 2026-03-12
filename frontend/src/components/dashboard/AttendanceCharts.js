@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Bar, Doughnut } from 'react-chartjs-2';
+import useAuthStore from '../../store/authStore';
 import { API_BASE_URL } from '../../utils/apiConfig';
 
 const AttendanceCharts = () => {
+    const { token } = useAuthStore();
     const [weeklyData, setWeeklyData] = useState(null);
     const [deptData, setDeptData] = useState(null);
 
@@ -13,7 +15,9 @@ const AttendanceCharts = () => {
 
     const fetchWeeklyData = async () => {
         try {
-            const res = await fetch(`${API_BASE_URL}/api/events/attendance/weekly`);
+            const res = await fetch(`${API_BASE_URL}/api/events/attendance/weekly`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setWeeklyData(data.weekly);
@@ -25,7 +29,9 @@ const AttendanceCharts = () => {
 
     const fetchDeptData = async () => {
         try {
-            const res = await fetch(`${API_BASE_URL}/api/events/attendance/department-stats`);
+            const res = await fetch(`${API_BASE_URL}/api/events/attendance/department-stats`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setDeptData(data.departments);

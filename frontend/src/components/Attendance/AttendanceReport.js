@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Search, Filter, Calendar, FileText, FileSpreadsheet, Users, UserX, AlertTriangle, Clock } from 'lucide-react';
+import useAuthStore from '../../store/authStore';
 import { API_BASE_URL } from '../../utils/apiConfig';
 import './AttendanceReport.css';
 
 const AttendanceReport = ({ reportType }) => {
+    const { user: currentUser, token } = useAuthStore();
     const [reportData, setReportData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -58,7 +60,11 @@ const AttendanceReport = ({ reportType }) => {
                 ? `${API_BASE_URL}/api/events/attendance/aggregate?start_date=${startDate}&end_date=${endDate}`
                 : `${API_BASE_URL}/api/events/attendance?target_date=${targetDate}`;
 
-            const response = await fetch(url);
+            const response = await fetch(url, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
 
             if (!response.ok) {
                 throw new Error(`Failed to fetch attendance data: ${response.statusText}`);
@@ -293,7 +299,7 @@ const AttendanceReport = ({ reportType }) => {
                                         <td>
                                             <div className="name-cell">
                                                 {record.photo_path ? (
-                                                    <img src={`${API_BASE_URL}/${record.photo_path}`} alt={record.name} className="mini-avatar" />
+                                                    <img src={record.photo_path.startsWith('http') ? record.photo_path : (record.photo_path.startsWith('/') ? `${API_BASE_URL}${record.photo_path}` : `${API_BASE_URL}/api/gallery/image/${currentUser?.company_id || 'default'}/${record.name}/original.jpg`)} alt={record.name} className="mini-avatar" />
                                                 ) : (
                                                     <div className="mini-avatar-placeholder">{record.name.charAt(0)}</div>
                                                 )}

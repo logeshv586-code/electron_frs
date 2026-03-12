@@ -17,12 +17,14 @@ import {
 } from 'lucide-react';
 import FaceCard from './FaceCard';
 import "react-datepicker/dist/react-datepicker.css";
+import useAuthStore from '../store/authStore';
 import './FaceEvents.css';
 
 import { API_BASE_URL as BASE_URL, fixImageUrl } from '../utils/apiConfig';
 const API_BASE_URL = `${BASE_URL}/api/events`;
 
 const FaceEvents = () => {
+  const { token } = useAuthStore();
   // Filter States
   const [cameras, setCameras] = useState(['All Cameras']);
   const [selectedCamera, setSelectedCamera] = useState('All Cameras');
@@ -55,7 +57,10 @@ const FaceEvents = () => {
       const cameraUrl = `${BASE_URL}/api/collections/cameras`;
       const response = await axios.get(cameraUrl, {
         timeout: 5000,
-        headers: { 'Content-Type': 'application/json' }
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
       });
       if (response.data.cameras) {
         const cameraNames = response.data.cameras.map(camera => camera.name);
@@ -77,7 +82,10 @@ const FaceEvents = () => {
       const response = await axios.get(`${API_BASE_URL}/filter`, {
         params,
         timeout: 10000,
-        headers: { 'Content-Type': 'application/json' }
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
       });
       return Array.isArray(response.data) ? response.data : [];
     } catch (err) {

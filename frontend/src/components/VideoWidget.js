@@ -1,9 +1,11 @@
 import React, { useState, useRef } from 'react';
+import useAuthStore from '../store/authStore';
 import './VideoWidget.css';
 
 import { API_BASE_URL as BASE_URL } from '../utils/apiConfig';
 
 const VideoWidget = () => {
+  const { token } = useAuthStore();
   const [selectedFile, setSelectedFile] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -26,7 +28,7 @@ const VideoWidget = () => {
       // Validate file type
       const validTypes = ['.mp4', '.avi', '.mov', '.mkv', '.wmv'];
       const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-      
+
       if (!validTypes.includes(fileExtension)) {
         alert('Please select a valid video file (MP4, AVI, MOV, MKV, WMV)');
         return;
@@ -64,6 +66,9 @@ const VideoWidget = () => {
 
       const uploadResponse = await fetch(`${BASE_URL}/api/video/upload`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
         body: formData,
       });
 
@@ -81,6 +86,7 @@ const VideoWidget = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           video_id: videoId,
@@ -116,7 +122,9 @@ const VideoWidget = () => {
   const startProgressTracking = (taskId) => {
     progressIntervalRef.current = setInterval(async () => {
       try {
-        const response = await fetch(`${BASE_URL}/api/video/process/${taskId}/status`);
+        const response = await fetch(`${BASE_URL}/api/video/process/${taskId}/status`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
         const progressData = await response.json();
 
         setProgress(progressData.progress || 0);
@@ -128,7 +136,9 @@ const VideoWidget = () => {
 
           // Get the full results
           try {
-            const resultResponse = await fetch(`${BASE_URL}/api/video/process/${taskId}/result`);
+            const resultResponse = await fetch(`${BASE_URL}/api/video/process/${taskId}/result`, {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
             if (resultResponse.ok) {
               const resultData = await resultResponse.json();
               setResults(resultData);
@@ -174,7 +184,9 @@ const VideoWidget = () => {
 
     try {
       // For now, just download the results as JSON since the backend doesn't provide processed video download
-      const response = await fetch(`${BASE_URL}/api/video/process/${taskId}/result`);
+      const response = await fetch(`${BASE_URL}/api/video/process/${taskId}/result`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       if (response.ok) {
         const resultData = await response.json();
         const dataStr = JSON.stringify(resultData, null, 2);
@@ -265,12 +277,12 @@ const VideoWidget = () => {
             <h3>Status</h3>
             <p>{statusMessage}</p>
           </div>
-          
+
           {isProcessing && (
             <div className="progress-section">
               <div className="progress-bar">
-                <div 
-                  className="progress-fill" 
+                <div
+                  className="progress-fill"
                   style={{ width: `${progress}%` }}
                 ></div>
               </div>
@@ -317,32 +329,32 @@ const VideoWidget = () => {
                         </span>
                       )}
                     </div>
-                    
+
                     {/* Show appearance intervals if available */}
-                    {results.person_tracking && results.person_tracking[person.name] && 
-                     results.person_tracking[person.name].appearances && (
-                      <div className="person-appearances">
-                        <h5>Appearances:</h5>
-                        {results.person_tracking[person.name].appearances.map((appearance, idx) => (
-                          <div key={idx} className="appearance-item">
-                            <span className="appearance-time">
-                              {formatTime(appearance.start_time)} - {formatTime(appearance.end_time)}
-                            </span>
-                            <span className="appearance-confidence">
-                              Confidence: {appearance.confidence.toFixed(1)}%
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    
+                    {results.person_tracking && results.person_tracking[person.name] &&
+                      results.person_tracking[person.name].appearances && (
+                        <div className="person-appearances">
+                          <h5>Appearances:</h5>
+                          {results.person_tracking[person.name].appearances.map((appearance, idx) => (
+                            <div key={idx} className="appearance-item">
+                              <span className="appearance-time">
+                                {formatTime(appearance.start_time)} - {formatTime(appearance.end_time)}
+                              </span>
+                              <span className="appearance-confidence">
+                                Confidence: {appearance.confidence.toFixed(1)}%
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                     {/* Show face detections if available */}
                     {results.face_detections && (
                       <div className="face-detections">
                         <h5>Face Detections:</h5>
                         <div className="detection-list">
                           {results.face_detections
-                            .filter(detection => 
+                            .filter(detection =>
                               detection.faces.some(face => face.name === person.name)
                             )
                             .slice(0, 5) // Show first 5 detections
@@ -359,7 +371,7 @@ const VideoWidget = () => {
                                     </span>
                                   </div>
                                   {personFace.face_image && (
-                                    <img 
+                                    <img
                                       src={`data:image/jpeg;base64,${personFace.face_image}`}
                                       alt={`${person.name} at ${formatTime(detection.timestamp)}`}
                                       className="face-thumbnail"

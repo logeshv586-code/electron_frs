@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User, Image as ImageIcon, Upload, Check, Info, RefreshCw, FileSpreadsheet, Folder, AlertCircle, Download } from 'lucide-react';
+import useAuthStore from '../store/authStore';
 import './RegistrationWidget.css';
 
 import { API_BASE_URL as BASE_URL } from '../utils/apiConfig';
 
 const RegistrationWidget = () => {
+  const { user: currentUser, token } = useAuthStore();
   const [activeMode, setActiveMode] = useState('list');
   const [employees, setEmployees] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
@@ -41,6 +43,7 @@ const RegistrationWidget = () => {
 
   // Ensure age is always 18 or above on component mount
   useEffect(() => {
+    fetchEmployees();
     const ageNum = parseInt(formData.age, 10);
     if (!formData.age || isNaN(ageNum) || ageNum < 18) {
       setFormData(prev => ({ ...prev, age: '18' }));
@@ -51,7 +54,11 @@ const RegistrationWidget = () => {
   const fetchEmployees = async () => {
     setLoadingEmployees(true);
     try {
-      const response = await fetch(`${BASE_URL}/api/registration/gallery`);
+      const response = await fetch(`${BASE_URL}/api/registration/gallery`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       const data = await response.json();
       const empList = Object.keys(data).map(key => ({
         id: key,
@@ -69,7 +76,7 @@ const RegistrationWidget = () => {
     if (activeMode === 'list') {
       fetchEmployees();
     }
-  }, [activeMode]);
+  }, [activeMode, token]);
 
   const handleInputChange = (field, value) => {
     // Validate age - must be 18 or above
@@ -196,6 +203,9 @@ const RegistrationWidget = () => {
 
       const response = await fetch(`${BASE_URL}/api/registration/register/single`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
         body: formDataToSend,
       });
 
@@ -412,7 +422,7 @@ const RegistrationWidget = () => {
                           <td style={{ padding: '12px' }}>{emp.emp_id || '-'}</td>
                           <td style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <img
-                              src={`${BASE_URL}/api/gallery/image/${emp.name}/${emp.image_filename || 'original.jpg'}`}
+                              src={emp.image_url ? `${BASE_URL}${emp.image_url}` : `${BASE_URL}/api/gallery/image/${currentUser?.company_id || 'default'}/${emp.name}/${emp.image_filename || 'original.jpg'}`}
                               alt={emp.name}
                               style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover' }}
                               onError={(e) => { e.target.style.display = 'none'; }}

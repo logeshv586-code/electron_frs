@@ -37,7 +37,7 @@ const useAuthStore = create(
       // Actions
       login: async (username, password, role, skipAuthUpdate = false) => {
         set({ isLoading: true, error: null });
-        
+
         try {
           const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
             method: 'POST',
@@ -53,12 +53,13 @@ const useAuthStore = create(
           }
 
           const data = await response.json();
-          
+
           const newState = {
             user: {
               username: data.username,
               role: data.role,
               assigned_menus: data.assigned_menus,
+              company_id: data.company_id,
               license_start_date: data.license_start_date,
               license_end_date: data.license_end_date,
             },
@@ -73,9 +74,9 @@ const useAuthStore = create(
           // Store token in localStorage for global fetch shim
           localStorage.setItem('auth_token', data.access_token);
           if (window && window.electronAPI && typeof window.electronAPI.setAuthToken === 'function') {
-            window.electronAPI.setAuthToken(data.access_token).catch(() => {});
+            window.electronAPI.setAuthToken(data.access_token).catch(() => { });
           }
-          
+
           return { success: true };
         } catch (error) {
           set({
@@ -99,7 +100,7 @@ const useAuthStore = create(
             headers: {
               'Authorization': `Bearer ${token}`
             }
-          }).catch(() => {});
+          }).catch(() => { });
         }
         set({
           user: null,
@@ -109,7 +110,7 @@ const useAuthStore = create(
         });
         localStorage.removeItem('auth_token');
         if (window && window.electronAPI && typeof window.electronAPI.clearAuthToken === 'function') {
-          window.electronAPI.clearAuthToken().catch(() => {});
+          window.electronAPI.clearAuthToken().catch(() => { });
         }
       },
 
@@ -183,7 +184,7 @@ const useAuthStore = create(
         });
         return menus.includes(menu);
       },
-      
+
       isLicenseExpired: () => {
         const { user } = get();
         if (!user) return false;
@@ -196,10 +197,10 @@ const useAuthStore = create(
     }),
     {
       name: 'auth-storage', // unique name for localStorage key
-      partialize: (state) => ({ 
-        user: state.user, 
-        token: state.token, 
-        isAuthenticated: state.isAuthenticated 
+      partialize: (state) => ({
+        user: state.user,
+        token: state.token,
+        isAuthenticated: state.isAuthenticated
       }), // Only persist these fields
     }
   )

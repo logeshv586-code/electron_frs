@@ -64,7 +64,8 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
-    { id: 'registration', label: 'Employee List', icon: <Users size={20} /> },
+    { id: 'companies', label: 'Companies', icon: <ScanFace size={20} /> }, // Added Companies
+    { id: 'registration', label: 'Employees', icon: <Users size={20} /> }, // Renamed to Employees
     {
       id: 'attendance',
       label: 'Attendance',
@@ -78,12 +79,11 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
     },
     { id: 'holiday-calendar', label: 'Holiday Calendar', icon: <CalendarDays size={20} /> },
     { id: 'gallery', label: 'Gallery', icon: <Image size={20} /> },
-    { id: 'users', label: 'User Management', icon: <Users size={20} /> },
     { id: 'events', label: 'Events', icon: <Bell size={20} /> },
-    { id: 'matching', label: 'Face Matching', icon: <ScanFace size={20} /> },
-    { id: 'video', label: 'Video Processing', icon: <Video size={20} /> },
-    { id: 'camera', label: 'Camera Management', icon: <Camera size={20} /> },
+    { id: 'camera', label: 'Cameras', icon: <Camera size={20} /> }, // Renamed to Cameras
     { id: 'stream-viewer', label: 'Stream Viewer', icon: <MonitorPlay size={20} /> },
+    { id: 'video', label: 'Video Processing', icon: <Video size={20} /> },
+    { id: 'users', label: 'User Management', icon: <Users size={20} /> },
     { id: 'settings', label: 'Settings', icon: <Settings size={20} /> },
   ];
 
@@ -96,8 +96,8 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
       });
       return normalizedMenus.includes(tab.id);
     }
-    if (user?.role === 'SuperAdmin') return ['dashboard', 'users', 'settings'].includes(tab.id);
-    if (user?.role === 'Admin') return ['dashboard', 'registration', 'attendance', 'holiday-calendar', 'camera', 'settings', 'gallery', 'users'].includes(tab.id);
+    if (user?.role === 'SuperAdmin') return ['dashboard', 'companies', 'registration', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
+    if (user?.role === 'Admin') return ['dashboard', 'registration', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
     return ['dashboard'].includes(tab.id);
   });
 

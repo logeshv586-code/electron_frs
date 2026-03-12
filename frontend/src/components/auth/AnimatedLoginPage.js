@@ -215,7 +215,6 @@ const AnimatedLoginPage = () => {
                   required
                 >
                   <option value="" disabled hidden>SELECT ROLE</option>
-                  <option value="SuperAdmin">SUPER ADMIN</option>
                   <option value="Admin">ADMIN</option>
                   <option value="Supervisor">SUPERVISOR</option>
                 </select>

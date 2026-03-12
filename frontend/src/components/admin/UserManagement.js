@@ -28,7 +28,6 @@ const UserManagement = () => {
     { id: 'registration', label: 'Registration' },
     { id: 'gallery', label: 'Gallery' },
     { id: 'events', label: 'Events' },
-    { id: 'matching', label: 'Face Matching' },
     { id: 'video', label: 'Video Processing' },
     { id: 'camera', label: 'Camera Management' },
     { id: 'stream-viewer', label: 'Stream Viewer' },
@@ -113,8 +112,10 @@ const UserManagement = () => {
       const body = { ...formData };
       if (isEditing) {
         // Only send updates if editing
-        delete body.password; // Don't update password here for now
         delete body.username; // Can't change username
+        if (!body.password) {
+          delete body.password; // Don't send empty password
+        }
       }
       // Normalize license fields: only include for Admin when SuperAdmin is acting
       if (!((currentUser.role === 'SuperAdmin') && (formData.role === 'Admin'))) {
@@ -331,19 +332,17 @@ const UserManagement = () => {
                           className={isEditing ? 'disabled-input' : ''}
                         />
                       </div>
-                      {!isEditing && (
-                        <div className="form-group">
-                          <label>PASSWORD</label>
-                          <input
-                            type="password"
-                            name="password"
-                            value={formData.password}
-                            onChange={handleInputChange}
-                            required
-                            placeholder="Enter password"
-                          />
-                        </div>
-                      )}
+                      <div className="form-group">
+                        <label>{isEditing ? 'RESET PASSWORD' : 'PASSWORD'}</label>
+                        <input
+                          type="password"
+                          name="password"
+                          value={formData.password}
+                          onChange={handleInputChange}
+                          required={!isEditing}
+                          placeholder={isEditing ? "Leave blank to keep current" : "Enter password"}
+                        />
+                      </div>
                     </div>
 
                     <div className="form-row">

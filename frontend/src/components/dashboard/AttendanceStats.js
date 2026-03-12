@@ -1,19 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Users, UserX, Clock, Calendar, Briefcase, Home, AlertTriangle } from 'lucide-react';
+import { Users, UserX, Clock, Calendar, Briefcase, Home, AlertTriangle, Camera, Scan } from 'lucide-react';
+import useAuthStore from '../../store/authStore';
 import { API_BASE_URL } from '../../utils/apiConfig';
 import './AttendanceStats.css';
 
 const AttendanceStats = ({ setActiveTab }) => {
+    const { token } = useAuthStore();
     const [stats, setStats] = useState({
-        total_users: 0,
-        present: 0,
-        not_marked: 0,
+        present_today: 0,
+        absent: 0,
         late: 0,
-        half_day: 0,
-        on_duty: 0,
-        leave: 0,
-        weekoff: 0,
-        wfh: 0
+        total_employees: 0,
+        cameras_active: 0,
+        recognitions_today: 0
     });
     const [loading, setLoading] = useState(true);
 
@@ -24,7 +23,11 @@ const AttendanceStats = ({ setActiveTab }) => {
     const fetchStats = async () => {
         try {
             setLoading(true);
-            const res = await fetch(`${API_BASE_URL}/api/events/dashboard-stats`);
+            const res = await fetch(`${API_BASE_URL}/api/events/dashboard-stats`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setStats(data);
@@ -43,8 +46,8 @@ const AttendanceStats = ({ setActiveTab }) => {
     const handleCardClick = (label) => {
         if (!setActiveTab) return;
         let filterStatus = '';
-        if (label === 'Present') filterStatus = 'Present';
-        if (label === 'Not Marked') filterStatus = 'Absent';
+        if (label === 'Present Today') filterStatus = 'Present';
+        if (label === 'Absent') filterStatus = 'Absent';
         if (label === 'Late') filterStatus = 'Late';
 
         if (filterStatus) {
@@ -54,21 +57,18 @@ const AttendanceStats = ({ setActiveTab }) => {
     };
 
     const statCards = [
-        { label: 'Present', value: stats.present, color: '#10b981', icon: <Users size={20} /> },
-        { label: 'Not Marked', value: stats.not_marked, color: '#ef4444', icon: <UserX size={20} /> },
+        { label: 'Present Today', value: stats.present_today, color: '#10b981', icon: <Users size={20} /> },
+        { label: 'Absent', value: stats.absent, color: '#ef4444', icon: <UserX size={20} /> },
         { label: 'Late', value: stats.late, color: '#f97316', icon: <AlertTriangle size={20} /> },
-        { label: 'Half Day', value: stats.half_day, color: '#f59e0b', icon: <Clock size={20} /> },
-        { label: 'On-Duty', value: stats.on_duty, color: '#3b82f6', icon: <Briefcase size={20} /> },
-        { label: 'Leave', value: stats.leave, color: '#8b5cf6', icon: <Calendar size={20} /> },
-        { label: 'Weekoff', value: stats.weekoff, color: '#64748b', icon: <Calendar size={20} /> },
-        { label: 'Work from Home', value: stats.wfh, color: '#0ea5e9', icon: <Home size={20} /> },
-        { label: 'Total Users', value: stats.total_users, color: '#0f172a', icon: <Users size={20} /> }
+        { label: 'Total Employees', value: stats.total_employees, color: '#0f172a', icon: <Users size={20} /> },
+        { label: 'Cameras Active', value: stats.cameras_active, color: '#3b82f6', icon: <Camera size={20} /> },
+        { label: 'Recognitions Today', value: stats.recognitions_today, color: '#8b5cf6', icon: <Scan size={20} /> }
     ];
 
     return (
         <div className="attendance-stats-grid">
             {statCards.map((stat, idx) => {
-                const isClickable = ['Present', 'Not Marked', 'Late'].includes(stat.label);
+                const isClickable = ['Present Today', 'Absent', 'Late'].includes(stat.label);
                 return (
                     <div
                         className="stat-card"

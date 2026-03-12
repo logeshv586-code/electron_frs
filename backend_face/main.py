@@ -288,17 +288,19 @@ async def get_captured_image(request: Request, face_type: str, company_id: str, 
         image_name = image_name.replace('..', '').replace('/', '').replace('\\', '')
 
         base_dir = os.path.join(CAPTURED_FACES_DIR, face_type, company_id)
+        fallback_base_dir = os.path.join(CAPTURED_FACES_DIR, face_type)
         candidates = []
 
-        if camera == "default":
-            candidates.append(os.path.join(base_dir, image_name))
-            if person and person not in ["default", "unknown"]:
-                candidates.append(os.path.join(base_dir, person, image_name))
-        else:
-            candidates.append(os.path.join(base_dir, camera, person, image_name))
-            candidates.append(os.path.join(base_dir, camera, image_name))
-            if person and person not in ["default", "unknown"]:
-                candidates.append(os.path.join(base_dir, person, image_name))
+        for b_dir in [base_dir, fallback_base_dir]:
+            if camera == "default":
+                candidates.append(os.path.join(b_dir, image_name))
+                if person and person not in ["default", "unknown"]:
+                    candidates.append(os.path.join(b_dir, person, image_name))
+            else:
+                candidates.append(os.path.join(b_dir, camera, person, image_name))
+                candidates.append(os.path.join(b_dir, camera, image_name))
+                if person and person not in ["default", "unknown"]:
+                    candidates.append(os.path.join(b_dir, person, image_name))
 
         image_path = next((path for path in candidates if os.path.exists(path)), None)
 

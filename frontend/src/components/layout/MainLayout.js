@@ -94,10 +94,13 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
         if (m === 'admin') return 'users';
         return m;
       });
+      if (['Admin', 'SuperAdmin'].includes(user?.role) && !normalizedMenus.includes('attendance')) {
+        normalizedMenus.push('attendance');
+      }
       return normalizedMenus.includes(tab.id);
     }
-    if (user?.role === 'SuperAdmin') return ['dashboard', 'companies', 'registration', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
-    if (user?.role === 'Admin') return ['dashboard', 'registration', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
+    if (user?.role === 'SuperAdmin') return ['dashboard', 'companies', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
+    if (user?.role === 'Admin') return ['dashboard', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
     return ['dashboard'].includes(tab.id);
   });
 

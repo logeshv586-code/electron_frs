@@ -16,6 +16,8 @@ from io import BytesIO
 from fastapi.responses import Response, StreamingResponse
 import matplotlib.pyplot as plt
 import base64
+from ws_manager import ws_manager
+import uuid
 
 def convert_file_path_to_url(file_path: str) -> str:
     try:
@@ -123,6 +125,7 @@ class FaceEvent(BaseModel):
     name: str
     image_path: str
     timestamp: str
+    company_id: str = "default"
 
 class FaceMatch(BaseModel):
     image_path: str
@@ -145,6 +148,27 @@ async def add_known_face(event: FaceEvent):
         # Move the image to the appropriate directory
         destination = os.path.join(person_dir, os.path.basename(event.image_path))
         shutil.move(event.image_path, destination)
+        
+        # Real-time WebSocket Broadcast
+        try:
+            image_url = convert_file_path_to_url(destination)
+            payload = {
+                "type": "RECOGNITION",
+                "payload": {
+                    "id": str(uuid.uuid4()),
+                    "name": event.name,
+                    "time": datetime.now().strftime("%H:%M"),
+                    "camera": "Camera 1", # Default or extract from path
+                    "status": "Recognized",
+                    "imgColor": "bg-blue-500",
+                    "image_url": image_url
+                }
+            }
+            import asyncio
+            asyncio.create_task(ws_manager.broadcast(payload, event.company_id))
+        except Exception as ws_err:
+            logger.error(f"Failed to broadcast recognition: {ws_err}")
+
         return {"message": "Known face added successfully"}
     except Exception as e:
         logger.error(f"Error adding known face: {e}")
@@ -161,6 +185,25 @@ async def add_unknown_face(event: FaceEvent):
         # Move the image to the appropriate directory
         destination = os.path.join(camera_dir, os.path.basename(event.image_path))
         shutil.move(event.image_path, destination)
+
+        # Real-time WebSocket Broadcast
+        try:
+            image_url = convert_file_path_to_url(destination)
+            payload = {
+                "type": "ALERT",
+                "payload": {
+                    "id": str(uuid.uuid4()),
+                    "type": "Unknown Person",
+                    "time": datetime.now().strftime("%H:%M"),
+                    "location": "Camera 1",
+                    "image_url": image_url
+                }
+            }
+            import asyncio
+            asyncio.create_task(ws_manager.broadcast(payload, event.company_id))
+        except Exception as ws_err:
+            logger.error(f"Failed to broadcast alert: {ws_err}")
+
         return {"message": "Unknown face added successfully"}
     except Exception as e:
         logger.error(f"Error adding unknown face: {e}")
@@ -213,6 +256,9 @@ async def filter_faces_logic(
     camera: Optional[str] = "all_cameras",
     face_type: Optional[str] = None
 ):
+    current_user = request.scope.get("user", {}) if request else {}
+    company_id = current_user.get("company_id", "default")
+    
     name_filter = name.lower().strip() if name and isinstance(name, str) else None
     from_date_obj = None
     to_date_obj = None
@@ -298,10 +344,21 @@ async def filter_faces_logic(
     def process_directory(base_dir: str, directory_type: str):
         if face_type_filter and face_type_filter != directory_type:
             return []
-        if not os.path.exists(base_dir):
+            
+        # Multi-tenancy: Only search in the company's sub-directory
+        tenant_dir = os.path.join(base_dir, company_id)
+        if not os.path.exists(tenant_dir):
+            # Fallback for "default" or if company dir doesn't exist yet but root does
+            if company_id == "default":
+                tenant_dir = base_dir
+            else:
+                return []
+                
+        if not os.path.exists(tenant_dir):
             return []
+            
         faces = []
-        for root_dir, _, files in os.walk(base_dir):
+        for root_dir, _, files in os.walk(tenant_dir):
             for face_file in files:
                 if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
@@ -583,6 +640,7 @@ async def get_attendance_logic(
             "name": name,
             "department": pdata.get("department", ""),
             "designation": pdata.get("designation", ""),
+            "email": pdata.get("email", ""),
             "status": "Absent",
             "punch_in": None,
             "punch_out": None,
@@ -914,6 +972,27 @@ async def get_weekly_attendance(request: Request):
             result.append({"date": day_str, "day": day.strftime("%a"), "present": 0, "absent": 0, "late": 0, "total": 0})
     return {"weekly": result}
 
+@router.get("/attendance/department-stats")
+async def get_department_stats(request: Request, target_date: Optional[str] = Query(None)):
+    """Get department-wise attendance statistics."""
+    try:
+        data = await get_attendance_logic(request, target_date)
+        records = data.get("attendance", [])
+        
+        dept_stats = {}
+        for r in records:
+            dept = r.get("department", "Unknown")
+            if dept not in dept_stats:
+                dept_stats[dept] = {"present": 0, "total": 0}
+            dept_stats[dept]["total"] += 1
+            if r["status"] == "Present":
+                dept_stats[dept]["present"] += 1
+                
+        return {"departments": dept_stats}
+    except Exception as e:
+        logger.error(f"Error getting department stats: {e}")
+        return {"departments": {}}
+
 @router.get("/attendance/aggregate")
 async def get_attendance_aggregate(
     request: Request,
@@ -932,6 +1011,14 @@ async def get_attendance_aggregate(
         metadata = get_metadata()
         persons = metadata.get("persons", metadata)
         
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        if company_id:
+            persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == company_id}
+        elif current_user.get("role") != "SuperAdmin":
+            username = current_user.get("username")
+            persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
+
         aggregate = {}
         for pid, pdata in persons.items():
             aggregate[pid] = {
@@ -939,6 +1026,7 @@ async def get_attendance_aggregate(
                 "name": pdata.get("name", pid),
                 "department": pdata.get("department", ""),
                 "designation": pdata.get("designation", ""),
+                "email": pdata.get("email", ""),
                 "photo_path": pdata.get("photo_path", ""),
                 "total_present": 0,
                 "total_absent": 0,

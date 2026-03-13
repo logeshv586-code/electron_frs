@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Search, Filter, Calendar, FileText, FileSpreadsheet, Users, UserX, AlertTriangle, Clock, ArrowLeft } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
-import { API_BASE_URL, getApiUrl } from '../../utils/apiConfig';
+import { API_BASE_URL, getApiUrl, fixImageUrl } from '../../utils/apiConfig';
 import './AttendanceReport.css';
 
 const AttendanceReport = ({ reportType, setActiveTab }) => {
@@ -116,8 +116,8 @@ const AttendanceReport = ({ reportType, setActiveTab }) => {
         if (filteredData.length === 0) return;
 
         const headers = isAggregate
-            ? ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Total Present', 'Total Absent', 'Total Late', 'Total Hrs', 'Avg Hrs/Day']
-            : ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Status', 'Punch In', 'Punch Out', 'Working Hours', 'Late'];
+            ? ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Email', 'Total Present', 'Total Absent', 'Total Late', 'Total Hrs', 'Avg Hrs/Day']
+            : ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Email', 'Status', 'Punch In', 'Punch Out', 'Working Hours', 'Late'];
 
         const csvRows = [headers.join(',')];
 
@@ -127,7 +127,8 @@ const AttendanceReport = ({ reportType, setActiveTab }) => {
                 row.emp_id || '',
                 `"${row.name || ''}"`,
                 `"${row.department || ''}"`,
-                `"${row.designation || ''}"`
+                `"${row.designation || ''}"`,
+                `"${row.email || ''}"`
             ];
 
             if (isAggregate) {
@@ -323,6 +324,7 @@ const AttendanceReport = ({ reportType, setActiveTab }) => {
                                 <th>Name</th>
                                 <th>Department</th>
                                 <th>Designation</th>
+                                <th>Email</th>
                                 {isAggregate ? (
                                     <>
                                         <th>Total Present</th>
@@ -352,7 +354,7 @@ const AttendanceReport = ({ reportType, setActiveTab }) => {
                                             <div className="name-cell">
                                                 {record.photo_path ? (
                                                     <img
-                                                        src={getApiUrl(record.photo_path)}
+                                                        src={fixImageUrl(record.photo_path)}
                                                         alt={record.name}
                                                         className="mini-avatar"
                                                         onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
@@ -362,13 +364,14 @@ const AttendanceReport = ({ reportType, setActiveTab }) => {
                                                     className="mini-avatar-placeholder"
                                                     style={{ display: record.photo_path ? 'none' : 'flex' }}
                                                 >
-                                                    {record.name.charAt(0).toUpperCase()}
+                                                    {record.name ? record.name.charAt(0).toUpperCase() : (record.email ? record.email.charAt(0).toUpperCase() : 'U')}
                                                 </div>
                                                 <span>{record.name}</span>
                                             </div>
                                         </td>
                                         <td>{record.department || '-'}</td>
                                         <td>{record.designation || '-'}</td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>{record.email || '-'}</td>
                                         {isAggregate ? (
                                             <>
                                                 <td style={{ color: '#10b981', fontWeight: 'bold' }}>{record.total_present}</td>

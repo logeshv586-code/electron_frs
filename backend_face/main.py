@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -17,6 +17,7 @@ from auth.routes import router as auth_router
 from auth.user_routes import router as user_router
 from auth.camera_routes import router as camera_router
 from auth.license_checker import start_license_checker
+from ws_manager import ws_manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +50,27 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+# ============= WEBSOCKET ENDPOINT =============
+
+@app.websocket("/ws/recognitions/{company_id}")
+async def websocket_endpoint(websocket: WebSocket, company_id: str):
+    """
+    WebSocket endpoint for real-time recognition events.
+    Filtered by company_id for multi-tenancy.
+    """
+    await ws_manager.connect(websocket, company_id)
+    try:
+        while True:
+            # Keep connection alive and wait for client to disconnect
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, company_id)
+    except Exception as e:
+        logger.error(f"WebSocket error for {company_id}: {e}")
+        ws_manager.disconnect(websocket, company_id)
+
+# ============= END WEBSOCKET =============
 
 # Mount individual service applications
 def mount_services():

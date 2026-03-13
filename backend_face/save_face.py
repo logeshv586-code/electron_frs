@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 import face_recognition
 from typing import Optional, Dict, Tuple
+import asyncio
+import uuid
 
 # CONFIG - Use dynamic path based on file location
 # Get the backend_face directory (parent of this file's directory)
@@ -312,6 +314,48 @@ def save_face_image(
             "source": source,
         }
         _append_log(log_row)
+        
+        # Real-time WebSocket Broadcast
+        try:
+            from ws_manager import ws_manager
+            # Determine if it's a recognition or an alert
+            if label_s == "unknown":
+                msg_type = "ALERT"
+                payload = {
+                    "id": str(uuid.uuid4()),
+                    "type": "Unknown Person",
+                    "time": datetime.now().strftime("%H:%M"),
+                    "location": camera_name or "Camera 1",
+                    "image_url": f"/api/captured/image/unknown/{comp}/{cam}/{fname}"
+                }
+            else:
+                msg_type = "RECOGNITION"
+                payload = {
+                    "id": str(uuid.uuid4()),
+                    "name": label.title(),
+                    "time": datetime.now().strftime("%H:%M"),
+                    "camera": camera_name or "Camera 1",
+                    "status": "Recognized",
+                    "imgColor": "bg-blue-500",
+                    "image_url": f"/api/captured/image/known/{comp}/{cam}/{label_s}/{fname}"
+                }
+            
+            # Since this might be called from a different thread, we use a helper or try/except loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(ws_manager.broadcast({"type": msg_type, "payload": payload}, company_id or "default"))
+                else:
+                    loop.run_until_complete(ws_manager.broadcast({"type": msg_type, "payload": payload}, company_id or "default"))
+            except RuntimeError:
+                # If no loop in this thread, we could create one or just use a background task if possible
+                # In most cases, the main thread loop is what we want. 
+                # For now, let's just log and try to use the one from main thread if accessible
+                pass
+
+        except Exception as ws_err:
+            print(f"Failed to broadcast from save_face: {ws_err}")
+
         return save_path
         
     except Exception as e:

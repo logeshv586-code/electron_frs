@@ -65,9 +65,48 @@ const Dashboard = ({ setActiveTab }) => {
     <div className="dashboard-container">
       <div className="dashboard-header">
         <h1 className="dashboard-title">Dashboard Overview</h1>
-        <button onClick={fetchDashboardData} className="refresh-button">
-          <span className="refresh-icon">↻</span> Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            onClick={fetchDashboardData}
+            className="refresh-button"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+          >
+            <span className="refresh-icon">↻</span> Refresh
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                const response = await axios.get(getApiUrl('/api/events/export/dashboard-pdf'), {
+                  headers: { 'Authorization': `Bearer ${token}` },
+                  responseType: 'blob'
+                });
+                const blob = new Blob([response.data], { type: 'application/pdf' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `dashboard_summary_${new Date().toISOString().split('T')[0]}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+              } catch (err) {
+                console.error('Export error:', err);
+                alert('Failed to export PDF');
+              }
+            }}
+            className="refresh-button"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: 'var(--primary-color)',
+              color: 'white',
+              border: 'none'
+            }}
+          >
+            <span role="img" aria-label="pdf">📄</span> Export PDF
+          </button>
+        </div>
       </div>
 
       <AttendanceStats setActiveTab={setActiveTab} />

@@ -11,6 +11,11 @@ import cv2
 import numpy as np
 import json
 from .config import KNOWN_FACES_DIR, UNKNOWN_FACES_DIR
+from xhtml2pdf import pisa
+from io import BytesIO
+from fastapi.responses import Response, StreamingResponse
+import matplotlib.pyplot as plt
+import base64
 
 def convert_file_path_to_url(file_path: str) -> str:
     try:
@@ -664,6 +669,118 @@ async def get_attendance_logic(
 
     return {"date": target_date, "attendance": result_list}
 
+@router.get("/export/dashboard-pdf")
+async def export_dashboard_pdf(
+    request: Request,
+    target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
+):
+    """Export dashboard summary (Stats + Charts + Attendance Table) as PDF."""
+    try:
+        dashboard_data = await get_dashboard_logic(request, target_date)
+        stats = dashboard_data.get("stats", { })
+        attendance = dashboard_data.get("attendance", [])
+        
+        # 1. Generate Summary Chart
+        chart_base64 = generate_summary_chart(
+            stats.get("present_today", 0), 
+            stats.get("absent", 0), 
+            stats.get("late", 0)
+        )
+        
+        # 2. Prepare headers and rows for attendance table
+        headers = ["Name", "Department", "Punch In", "Status"]
+        rows = []
+        for r in attendance[:15]: # Limit to top 15 for dashboard summary
+            rows.append([
+                r.get("name", ""),
+                r.get("department", ""),
+                r.get("punch_in", "-"),
+                r.get("status", "")
+            ])
+            
+        generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
+        title = f"Dashboard Summary Report - {target_date or datetime.now().strftime('%Y-%m-%d')}"
+        
+        # We can add a "Stats Section" to the HTML specifically for dashboard
+        stats_html = f"""
+        <div style="display: table; width: 100%; margin-bottom: 20px;">
+            <div style="display: table-row;">
+                <div style="display: table-cell; width: 33%; padding: 10px; background: #f1f5f9; text-align: center;">
+                    <div style="font-size: 8pt; color: #64748b;">TOTAL EMPLOYEES</div>
+                    <div style="font-size: 14pt; font-weight: bold; color: #1e293b;">{stats.get("total_employees", 0)}</div>
+                </div>
+                <div style="display: table-cell; width: 33%; padding: 10px; background: #ecfdf5; text-align: center; border-left: 10px solid white;">
+                    <div style="font-size: 8pt; color: #059669;">PRESENT TODAY</div>
+                    <div style="font-size: 14pt; font-weight: bold; color: #059669;">{stats.get("present_today", 0)}</div>
+                </div>
+                <div style="display: table-cell; width: 33%; padding: 10px; background: #fff7ed; text-align: center; border-left: 10px solid white;">
+                    <div style="font-size: 8pt; color: #d97706;">LATE TODAY</div>
+                    <div style="font-size: 14pt; font-weight: bold; color: #d97706;">{stats.get("late", 0)}</div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        # Build HTML
+        header_html = "".join([f"<th>{h}</th>" for h in headers])
+        rows_html = "".join(["<tr>" + "".join([f"<td>{cell}</td>" for cell in row]) + "</tr>" for row in rows])
+        
+        html = f"""
+        <html>
+        <head>
+        <style>
+            @page {{ size: a4; margin: 1cm; }}
+            body {{ font-family: 'Helvetica', 'Arial', sans-serif; color: #333; line-height: 1.4; }}
+            .header {{ text-align: center; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 20px; }}
+            .header h1 {{ margin: 0; color: #1e293b; font-size: 18pt; }}
+            .header h2 {{ margin: 5px 0; color: #475569; font-size: 14pt; }}
+            .info {{ margin-bottom: 10px; font-size: 9pt; color: #64748b; }}
+            .chart-section {{ text-align: center; margin-bottom: 20px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
+            th {{ background-color: #1e293b; color: white; text-align: left; padding: 6px; font-size: 9pt; }}
+            td {{ border-bottom: 1px solid #e2e8f0; padding: 6px; font-size: 8pt; }}
+            tr:nth-child(even) {{ background-color: #f8fafc; }}
+            .footer {{ border-top: 1px solid #cbd5e1; padding-top: 10px; margin-top: 20px; text-align: center; font-size: 8pt; color: #64748b; }}
+        </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>FACE RECOGNITION SYSTEM</h1>
+                <h2>{title}</h2>
+            </div>
+            <div class="info">Generated On: {generated_on}</div>
+            
+            {stats_html}
+
+            <div class="chart-section">
+                <img src="data:image/png;base64,{chart_base64}" style="width: 300px;">
+            </div>
+
+            <h3 style="font-size: 12pt; color: #1e293b; margin-bottom: 10px;">Attendance Highlights</h3>
+            <table>
+                <thead><tr>{header_html}</tr></thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+            
+            <div class="footer">Generated by AI Surveillance System</div>
+        </body>
+        </html>
+        """
+        
+        pdf_bytes = render_pdf(html)
+        if not pdf_bytes:
+            raise HTTPException(status_code=500, detail="Failed to generate PDF")
+            
+        filename = f"dashboard_summary_{target_date or datetime.now().strftime('%Y-%m-%d')}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Error exporting dashboard PDF: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/dashboard")
 async def get_dashboard(
     request: Request,
@@ -991,4 +1108,315 @@ async def export_attendance(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+def render_pdf(html_content: str) -> bytes:
+    """Helper to convert HTML to PDF bytes using xhtml2pdf."""
+    result = BytesIO()
+    # xhtml2pdf doesn't like some complicated CSS, but basic should work
+    pdf = pisa.pisaDocument(BytesIO(html_content.encode("UTF-8")), result)
+    if not pdf.err:
+        return result.getvalue()
+    return None
+
+def generate_summary_chart(present, absent, late):
+    """Generate a pie chart for attendance summary and return as base64 string."""
+    try:
+        plt.figure(figsize=(5, 3))
+        labels = []
+        sizes = []
+        colors = []
+        
+        if present > 0:
+            labels.append('Present')
+            sizes.append(present)
+            colors.append('#10b981')
+        if absent > 0:
+            labels.append('Absent')
+            sizes.append(absent)
+            colors.append('#ef4444')
+        if late > 0:
+            labels.append('Late')
+            sizes.append(late)
+            colors.append('#f97316')
+            
+        if not sizes:
+             # Default empty chart
+             labels = ['No Data']
+             sizes = [1]
+             colors = ['#e2e8f0']
+
+        plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=colors)
+        plt.axis('equal')
+        plt.title('Attendance Summary')
+        
+        buf = BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+        plt.close()
+        return base64.b64encode(buf.getvalue()).decode('utf-8')
+    except Exception as e:
+        logger.warning(f"Error generating chart: {e}")
+        return None
+
+def get_base_html_template(title, generated_on, headers, rows, total_count, chart_base64=None):
+    """Generate the base HTML template for reports."""
+    header_html = "".join([f"<th>{h}</th>" for h in headers])
+    
+    rows_html = ""
+    for row in rows:
+        rows_html += "<tr>"
+        for cell in row:
+            rows_html += f"<td>{cell}</td>"
+        rows_html += "</tr>"
+
+    chart_html = ""
+    if chart_base64:
+        chart_html = f"""
+        <div class="chart-section">
+            <img src="data:image/png;base64,{chart_base64}" style="width: 350px;">
+        </div>
+        """
+
+    return f"""
+    <html>
+    <head>
+    <style>
+        @page {{
+            size: a4;
+            margin: 1cm;
+        }}
+        body {{
+            font-family: 'Helvetica', 'Arial', sans-serif;
+            color: #333;
+            line-height: 1.4;
+        }}
+        .header {{
+            text-align: center;
+            border-bottom: 2px solid #1e293b;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }}
+        .header h1 {{
+            margin: 0;
+            color: #1e293b;
+            font-size: 18pt;
+        }}
+        .header h2 {{
+            margin: 5px 0;
+            color: #475569;
+            font-size: 14pt;
+        }}
+        .info {{
+            margin-bottom: 10px;
+            font-size: 9pt;
+            color: #64748b;
+        }}
+        .chart-section {{
+            text-align: center;
+            margin-bottom: 20px;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }}
+        th {{
+            background-color: #1e293b;
+            color: white;
+            text-align: left;
+            padding: 6px;
+            font-size: 9pt;
+        }}
+        td {{
+            border-bottom: 1px solid #e2e8f0;
+            padding: 6px;
+            font-size: 8pt;
+        }}
+        tr:nth-child(even) {{
+            background-color: #f8fafc;
+        }}
+        .footer {{
+            border-top: 1px solid #cbd5e1;
+            padding-top: 10px;
+            margin-top: 20px;
+            text-align: center;
+            font-size: 8pt;
+            color: #64748b;
+        }}
+        .summary {{
+            font-weight: bold;
+            text-align: right;
+            margin-top: 10px;
+            font-size: 10pt;
+            color: #1e293b;
+        }}
+    </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>FACE RECOGNITION SYSTEM</h1>
+            <h2>{title}</h2>
+        </div>
+        <div class="info">
+            Generated On: {generated_on}
+        </div>
+        
+        {chart_html}
+
+        <table>
+            <thead>
+                <tr>
+                    {header_html}
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+        <div class="summary">
+            Total Records: {total_count}
+        </div>
+        <div class="footer">
+            Generated by AI Surveillance System
+        </div>
+    </body>
+    </html>
+    """
+
+@router.get("/export/attendance-pdf")
+async def export_attendance_pdf(
+    request: Request,
+    target_date: Optional[str] = Query(None, description="Target date in YYYY-MM-DD format")
+):
+    """Export attendance report for a specific date as PDF."""
+    data = await get_attendance_logic(request, target_date)
+    records = data.get("attendance", [])
+    
+    headers = ["S.No", "Emp ID", "Name", "Department", "Designation", "Status", "Punch In", "Punch Out", "Working Hours", "Late"]
+    rows = []
+    for r in records:
+        rows.append([
+            r.get("s_no", ""),
+            r.get("emp_id", ""),
+            r.get("name", ""),
+            r.get("department", ""),
+            r.get("designation", ""),
+            r.get("status", ""),
+            r.get("punch_in", ""),
+            r.get("punch_out", ""),
+            r.get("working_hours", ""),
+            "Yes" if r.get("is_late") else "No"
+        ])
+    
+    generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
+    
+    # Generate chart
+    present = sum(1 for r in records if r.get("status") == "Present")
+    absent = len(records) - present
+    late = sum(1 for r in records if r.get("is_late", False))
+    chart_base64 = generate_summary_chart(present, absent, late)
+    
+    html = get_base_html_template("Daily Attendance Report", generated_on, headers, rows, len(records), chart_base64)
+    
+    pdf_bytes = render_pdf(html)
+    if not pdf_bytes:
+        raise HTTPException(status_code=500, detail="Failed to generate PDF")
+        
+    filename = f"attendance_report_{target_date or datetime.now().strftime('%Y-%m-%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@router.get("/export/employees-pdf")
+async def export_employees_pdf(request: Request):
+    """Export employee list as PDF."""
+    current_user = request.scope.get("user", {})
+    metadata = get_metadata()
+    persons = metadata.get("persons", metadata)
+    
+    # SaaS Filter
+    if current_user.get("role") != "SuperAdmin":
+        username = current_user.get("username")
+        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
+    
+    headers = ["Emp ID", "Name", "Department", "Designation", "Email", "Status"]
+    rows = []
+    for pid, pdata in persons.items():
+        if not isinstance(pdata, dict) or 'name' not in pdata:
+            continue
+        rows.append([
+            pdata.get("emp_id", ""),
+            pdata.get("name", ""),
+            pdata.get("department", ""),
+            pdata.get("designation", ""),
+            pdata.get("email", ""),
+            pdata.get("status", "Active")
+        ])
+    
+    generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
+    html = get_base_html_template("Employee Registration Report", generated_on, headers, rows, len(persons))
+    
+    pdf_bytes = render_pdf(html)
+    if not pdf_bytes:
+        raise HTTPException(status_code=500, detail="Failed to generate PDF")
+        
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=employees_report.pdf"}
+    )
+
+@router.get("/export/attendance-aggregate-pdf")
+async def export_attendance_pdf_aggregate(
+    request: Request,
+    start_date: str = Query(..., description="Start date in YYYY-MM-DD format"),
+    end_date: str = Query(..., description="End date in YYYY-MM-DD format")
+):
+    """Export aggregated attendance report for a date range as PDF."""
+    try:
+        data = await get_attendance_aggregate(request, start_date, end_date)
+        records = data.get("aggregate", [])
+        
+        headers = ["S.No", "Emp ID", "Name", "Department", "Designation", "Total Present", "Total Absent", "Total Late", "Total Hrs", "Avg Hrs/Day"]
+        rows = []
+        for r in records:
+            rows.append([
+                r.get("s_no", ""),
+                r.get("emp_id", ""),
+                r.get("name", ""),
+                r.get("department", ""),
+                r.get("designation", ""),
+                r.get("total_present", 0),
+                r.get("total_absent", 0),
+                r.get("total_late", 0),
+                r.get("total_working_hours", "-"),
+                r.get("avg_working_hours", "-")
+            ])
+        
+        generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
+        title = f"Attendance Aggregate Report ({start_date} to {end_date})"
+        
+        # Calculate summary for aggregate chart
+        total_p = sum(r.get("total_present", 0) for r in records)
+        total_a = sum(r.get("total_absent", 0) for r in records)
+        total_l = sum(r.get("total_late", 0) for r in records)
+        chart_base64 = generate_summary_chart(total_p, total_a, total_l)
+        
+        html = get_base_html_template(title, generated_on, headers, rows, len(records), chart_base64)
+        
+        pdf_bytes = render_pdf(html)
+        if not pdf_bytes:
+            raise HTTPException(status_code=500, detail="Failed to generate PDF")
+            
+        filename = f"attendance_aggregate_{start_date}_to_{end_date}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Error exporting aggregate PDF: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 

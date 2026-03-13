@@ -158,8 +158,49 @@ const AttendanceReport = ({ reportType, setActiveTab }) => {
         document.body.removeChild(a);
     };
 
-    const exportToPDF = () => {
-        window.print();
+    const exportToPDF = async () => {
+        try {
+            setLoading(true);
+            // Construct the appropriate URL based on report type
+            const endpoint = isAggregate
+                ? `${API_BASE_URL}/api/events/export/attendance-aggregate-pdf?start_date=${startDate}&end_date=${endDate}`
+                : `${API_BASE_URL}/api/events/export/attendance-pdf?target_date=${targetDate}`;
+
+            const response = await fetch(endpoint, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.detail || 'Failed to generate PDF');
+            }
+
+            const blob = await response.blob();
+            const downloadUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+
+            const filename = isAggregate
+                ? `attendance_aggregate_report_${startDate}_to_${endDate}.pdf`
+                : `attendance_report_${targetDate}.pdf`;
+
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+
+            // Cleanup
+            setTimeout(() => {
+                window.URL.revokeObjectURL(downloadUrl);
+                document.body.removeChild(a);
+            }, 100);
+        } catch (err) {
+            console.error("Error exporting PDF:", err);
+            setError(`Failed to export PDF: ${err.message}`);
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (

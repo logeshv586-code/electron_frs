@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import useAuthStore from '../../store/authStore';
 import { API_BASE_URL } from '../../utils/apiConfig';
-import { Users, UserPlus, Edit2, Trash2, X, Shield, Search, Check } from 'lucide-react';
+import { Users, UserPlus, Edit2, Trash2, X, Shield, Search, Check, FileText } from 'lucide-react';
 import './UserManagement.css';
 
 const UserManagement = () => {
@@ -238,6 +238,43 @@ const UserManagement = () => {
             setShowModal(true);
           }}>
             <UserPlus size={18} /> Add User
+          </button>
+          <button
+            className="export-btn-pdf"
+            onClick={async () => {
+              try {
+                const response = await fetch(`${API_BASE_URL}/api/events/export/employees-pdf`, {
+                  headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!response.ok) throw new Error('Failed to export PDF');
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'employee_registration_report.pdf';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+              } catch (err) {
+                alert('PDF Export Error: ' + err.message);
+              }
+            }}
+            style={{
+              background: '#1e293b',
+              color: 'white',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              cursor: 'pointer',
+              fontSize: '0.9rem',
+              fontWeight: '500'
+            }}
+          >
+            <FileText size={18} /> PDF Report
           </button>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, Image as ImageIcon, Upload, Check, Info, RefreshCw, FileSpreadsheet, Folder, AlertCircle, Download } from 'lucide-react';
+import { User, Image as ImageIcon, Upload, Check, Info, RefreshCw, FileSpreadsheet, Folder, AlertCircle, Download, FileText } from 'lucide-react';
 import useAuthStore from '../store/authStore';
 import './RegistrationWidget.css';
 
@@ -407,6 +407,31 @@ const RegistrationWidget = () => {
                 }
               }} style={{ width: 'auto', background: 'var(--bg-panel)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
                 <Download size={16} /> Export CSV
+              </button>
+              <button className="btn-submit-clean" onClick={async () => {
+                try {
+                  const response = await fetch(`${BASE_URL}/api/events/export/employees-pdf`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                  });
+                  if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.detail || 'Failed to generate PDF');
+                  }
+                  const blob = await response.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'employees_report.pdf';
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  window.URL.revokeObjectURL(url);
+                } catch (err) {
+                  console.error('Export error:', err);
+                  showMessage(err.message || 'Failed to export PDF', 'error');
+                }
+              }} style={{ width: 'auto', background: 'var(--bg-panel)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+                <FileText size={16} /> Export PDF
               </button>
               <button className="btn-submit-clean" onClick={() => setActiveMode('single')} style={{ width: 'auto' }}>
                 + Add Employee

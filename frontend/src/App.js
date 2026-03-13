@@ -109,7 +109,7 @@ const AppContent = () => {
       case 'day-report':
       case 'week-report':
       case 'month-report':
-        return <AttendanceReport reportType={activeTab} />;
+        return <AttendanceReport reportType={activeTab} setActiveTab={setActiveTab} />;
       default:
         return <Dashboard />;
     }

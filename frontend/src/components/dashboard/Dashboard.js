@@ -4,6 +4,7 @@ import useAuthStore from '../../store/authStore';
 import { getApiUrl } from '../../utils/apiConfig';
 import AttendanceStats from './AttendanceStats';
 import AttendanceCharts from './AttendanceCharts';
+import FaceRecognitionAnalytics from './FaceRecognitionAnalytics';
 import './Dashboard.css';
 
 const Dashboard = ({ setActiveTab }) => {
@@ -141,6 +142,10 @@ const Dashboard = ({ setActiveTab }) => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div style={{ marginTop: '2rem' }}>
+        <FaceRecognitionAnalytics />
       </div>
     </div>
   );

@@ -383,8 +383,28 @@ const RegistrationWidget = () => {
               {employees.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()) || (e.emp_id && e.emp_id.toLowerCase().includes(searchTerm.toLowerCase()))).length} employees
             </span>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
-              <button className="btn-submit-clean" onClick={() => {
-                window.open(`${BASE_URL}/api/events/employees/export`, '_blank');
+              <button className="btn-submit-clean" onClick={async () => {
+                try {
+                  const response = await fetch(`${BASE_URL}/api/events/employees/export`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                  });
+                  if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || 'Export failed');
+                  }
+                  const blob = await response.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'employees_export.csv';
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  window.URL.revokeObjectURL(url);
+                } catch (err) {
+                  console.error('Export error:', err);
+                  showMessage(err.message || 'Failed to export employee data', 'error');
+                }
               }} style={{ width: 'auto', background: 'var(--bg-panel)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
                 <Download size={16} /> Export CSV
               </button>

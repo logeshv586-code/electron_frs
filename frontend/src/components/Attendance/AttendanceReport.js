@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Search, Filter, Calendar, FileText, FileSpreadsheet, Users, UserX, AlertTriangle, Clock } from 'lucide-react';
+import { Download, Search, Filter, Calendar, FileText, FileSpreadsheet, Users, UserX, AlertTriangle, Clock, ArrowLeft } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
-import { API_BASE_URL } from '../../utils/apiConfig';
+import { API_BASE_URL, getApiUrl } from '../../utils/apiConfig';
 import './AttendanceReport.css';
 
-const AttendanceReport = ({ reportType }) => {
+const AttendanceReport = ({ reportType, setActiveTab }) => {
     const { user: currentUser, token } = useAuthStore();
     const [reportData, setReportData] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -165,9 +165,20 @@ const AttendanceReport = ({ reportType }) => {
     return (
         <div className="attendance-report-container animate-fade-in">
             <div className="report-header">
-                <div>
-                    <h2>{getDayTitle()}</h2>
-                    <p className="subtitle">View and manage employee attendance logs</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {setActiveTab && (
+                        <button
+                            onClick={() => setActiveTab('dashboard')}
+                            className="btn-back-clean"
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-secondary)' }}
+                        >
+                            <ArrowLeft size={20} /> Back
+                        </button>
+                    )}
+                    <div>
+                        <h2 style={{ margin: 0 }}>{getDayTitle()}</h2>
+                        <p className="subtitle" style={{ margin: '4px 0 0' }}>View and manage employee attendance logs</p>
+                    </div>
                 </div>
                 <div className="report-actions">
                     <div className="search-bar">
@@ -299,10 +310,19 @@ const AttendanceReport = ({ reportType }) => {
                                         <td>
                                             <div className="name-cell">
                                                 {record.photo_path ? (
-                                                    <img src={record.photo_path.startsWith('http') ? record.photo_path : (record.photo_path.startsWith('/') ? `${API_BASE_URL}${record.photo_path}` : `${API_BASE_URL}/api/gallery/image/${currentUser?.company_id || 'default'}/${record.name}/original.jpg`)} alt={record.name} className="mini-avatar" />
-                                                ) : (
-                                                    <div className="mini-avatar-placeholder">{record.name.charAt(0)}</div>
-                                                )}
+                                                    <img
+                                                        src={getApiUrl(record.photo_path)}
+                                                        alt={record.name}
+                                                        className="mini-avatar"
+                                                        onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
+                                                    />
+                                                ) : null}
+                                                <div
+                                                    className="mini-avatar-placeholder"
+                                                    style={{ display: record.photo_path ? 'none' : 'flex' }}
+                                                >
+                                                    {record.name.charAt(0).toUpperCase()}
+                                                </div>
                                                 <span>{record.name}</span>
                                             </div>
                                         </td>

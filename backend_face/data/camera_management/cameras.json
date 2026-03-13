@@ -9,7 +9,7 @@
     "location": "Eagle Tower",
     "status": "inactive",
     "created_at": "2025-07-31 10:49:38.890043",
-    "last_seen": "2026-03-13 12:15:40.234290",
+    "last_seen": "2026-03-13 14:06:52.552268",
     "error_count": 0,
     "is_active": false,
     "company_id": null
@@ -24,7 +24,7 @@
     "location": "Eagle Tower",
     "status": "inactive",
     "created_at": "2025-09-20 12:01:37.386403",
-    "last_seen": "2026-03-13 12:15:42.635318",
+    "last_seen": "2026-03-13 14:07:10.946841",
     "error_count": 0,
     "is_active": false,
     "company_id": null
@@ -39,7 +39,7 @@
     "location": "Eagle Tower",
     "status": "inactive",
     "created_at": "2025-09-20 12:05:52.267585",
-    "last_seen": "2026-03-11 14:18:14.519281",
+    "last_seen": "2026-03-13 14:07:12.126814",
     "error_count": 0,
     "is_active": false,
     "company_id": null

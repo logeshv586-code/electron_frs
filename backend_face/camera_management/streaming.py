@@ -326,9 +326,27 @@ class CameraStreamManager:
                     
                     # Skip processing for some frames to maintain frame rate
                     if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
-                        # Use raw frame WITHOUT bounding boxes on skipped frames
-                        # (avoids stale bbox positions appearing on wrong faces)
-                        self.processed_frames_latest[stream_id] = frame.copy()
+                        # Use raw frame and draw last known bounding boxes on skipped frames
+                        skipped_frame = frame.copy()
+                        if self.show_bounding_box:
+                            try:
+                                # Re-use last detections from tracking
+                                last_dets = []
+                                import face_pipeline
+                                with face_pipeline.tracking_lock:
+                                    if stream_id in face_pipeline.person_tracking:
+                                        for track_id, info in face_pipeline.person_tracking[stream_id].items():
+                                            if info.get('bbox'):
+                                                last_dets.append({
+                                                    'name': info.get('name', 'Unknown'),
+                                                    'conf': 0.0,
+                                                    'bbox': info['bbox']
+                                                })
+                                if last_dets:
+                                    skipped_frame = face_pipeline.render_bounding_boxes(skipped_frame, last_dets, show_bounding_box=True)
+                            except Exception as e:
+                                pass
+                        self.processed_frames_latest[stream_id] = skipped_frame
                     else:
                         # Process frame for face detection
                         try:

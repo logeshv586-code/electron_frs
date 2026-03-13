@@ -6,11 +6,48 @@
   flex-direction: column;
 }
 
+/* --- Advanced UI Components --- */
+
+.glass-panel {
+  background: var(--bg-panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-lg);
+  box-shadow: var(--shadow-lg), 0 0 10px rgba(var(--primary-rgb), 0.05);
+}
+
+.icon-wrapper-advanced {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  padding: 10px;
+  position: relative;
+  transition: var(--transition-bounce);
+  border: 2px solid transparent;
+  background: var(--bg-input);
+}
+
+.icon-wrapper-advanced::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0.3;
+  transition: var(--transition-normal);
+}
+
+.icon-wrapper-advanced:hover::after {
+  opacity: 0.4;
+  inset: -6px;
+}
+
 .dashboard-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 24px;
 }
 
 .dashboard-title {

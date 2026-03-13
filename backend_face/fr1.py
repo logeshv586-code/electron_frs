@@ -68,17 +68,15 @@ def load_known_faces(data_dir: str, company_id: Optional[str] = None) -> Tuple[L
     if not os.path.isdir(data_dir):
         raise ValueError(f"Data directory does not exist: {data_dir}")
 
-    # Determine which directories to scan
-    # If company_id is provided, we scan data/gallery/<company_id>/*
-    # Otherwise we scan the base data directory (for backward compatibility)
-    scan_dir = data_dir
-    if company_id:
-        gallery_dir = os.path.join(data_dir, "gallery", company_id)
-        if os.path.exists(gallery_dir):
-            scan_dir = gallery_dir
-        else:
-            print(f"[WARN] Gallery directory for company {company_id} not found: {gallery_dir}")
-            return [], []
+    # If company_id is not provided, use "default" to ensure the gallery is loaded
+    company_id_to_use = company_id if company_id else "default"
+    
+    gallery_dir = os.path.join(data_dir, "gallery", company_id_to_use)
+    if os.path.exists(gallery_dir):
+        scan_dir = gallery_dir
+    else:
+        print(f"[WARN] Gallery directory for company {company_id_to_use} not found: {gallery_dir}")
+        return [], []
 
     # Filter out system folders and non-directories
     person_dirs = [

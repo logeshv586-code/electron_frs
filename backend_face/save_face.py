@@ -171,6 +171,8 @@ def save_face_image(
 
     label = label or "unknown"
     label_s = sanitize_label(label)
+    cam = sanitize_label(camera_name) if camera_name else "default"
+    comp = sanitize_label(company_id) if company_id else "default"
 
     # Check face confidence before saving (must be > 70% for quality)
     if confidence is not None and confidence < 0.6:

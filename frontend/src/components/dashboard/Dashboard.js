@@ -61,29 +61,31 @@ const AnimatedNumber = ({ value }) => {
 // 2. Advanced KPI Card
 const KPICard = ({ title, value, trend, trendValue, icon: Icon, colorClass, data = [], gradient }) => (
   <div
-    className={`rounded-2xl shadow-sm border p-5 flex flex-col justify-between hover:shadow-xl transition-all duration-300 relative overflow-hidden group`}
-    style={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}
+    className={`glass-panel p-5 flex flex-col justify-between hover:scale-[1.02] transition-all duration-300 relative overflow-hidden group`}
+    style={{ borderColor: 'var(--border-color)' }}
   >
-    <div className={`absolute -right-6 -top-6 w-24 h-24 rounded-full opacity-10 blur-2xl transition-transform group-hover:scale-150 bg-gradient-to-br ${gradient}`}></div>
+    {/* Background Glow */}
+    <div className={`absolute -right-8 -top-8 w-32 h-32 rounded-full opacity-10 blur-3xl transition-transform group-hover:scale-150 bg-gradient-to-br ${gradient}`}></div>
 
     <div className="flex justify-between items-start z-10">
-      <div>
-        <p className="text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>{title}</p>
-        <h2 className={`text-3xl font-bold ${colorClass}`}>
+      <div className="flex-1">
+        <p className="text-[10px] uppercase tracking-wider font-bold mb-1 opacity-70" style={{ color: 'var(--text-secondary)' }}>{title}</p>
+        <h2 className={`text-3xl font-bold tracking-tight ${colorClass}`}>
           <AnimatedNumber value={value} />
         </h2>
-        <div className="flex items-center mt-2">
+        <div className="flex items-center mt-3">
           <span
-            className={`text-xs font-semibold ${trend === 'up' ? 'text-green-500' : 'text-red-500'} flex items-center px-2 py-0.5 rounded-full`}
-            style={{ backgroundColor: 'var(--bg-input)' }}
+            className={`text-[10px] font-bold ${trend === 'up' ? 'text-green-500' : 'text-red-500'} flex items-center px-2 py-0.5 rounded-full border border-current bg-opacity-10`}
+            style={{ backgroundColor: trend === 'up' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)' }}
           >
             {trend === 'up' ? '↑' : '↓'} {trendValue}
           </span>
-          <span className="text-xs ml-2" style={{ color: 'var(--text-secondary)' }}>vs yesterday</span>
         </div>
       </div>
-      <div className={`p-3 rounded-xl bg-gradient-to-br ${gradient} text-white shadow-sm`}>
-        <Icon size={24} strokeWidth={2} />
+
+      {/* Advanced Icon Wrapper with prominent dynamic background */}
+      <div className={`icon-wrapper-advanced ${colorClass} bg-current bg-opacity-20`}>
+        <Icon size={22} strokeWidth={2} />
       </div>
     </div>
 
@@ -287,15 +289,15 @@ export default function Dashboard({ setActiveTab }) {
         {/* ROW 2: SYSTEM HEALTH */}
         <div className="grid grid-cols-1 gap-6">
           {/* System Health */}
-          <div className="rounded-2xl p-6 shadow-sm border flex flex-col justify-between lg:col-span-1" style={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}>
+          <div className="glass-panel p-6 flex flex-col justify-between lg:col-span-1">
             <h3 className="font-bold mb-4 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
               <Server size={18} style={{ color: 'var(--text-secondary)' }} /> System Health
             </h3>
             <div className="space-y-4">
-              <div className="flex justify-between items-center p-3 rounded-xl" style={{ backgroundColor: 'var(--bg-input)' }}>
+              <div className="flex justify-between items-center p-3 rounded-xl border border-transparent hover:border-[var(--border-color)] transition-all" style={{ backgroundColor: 'var(--bg-input)' }}>
                 <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg shadow-sm" style={{ backgroundColor: 'var(--bg-panel)' }}><Cpu size={16} className="text-blue-500" /></div>
-                  <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>AI Inference Engine</span>
+                  <div className="p-2 rounded-lg shadow-sm bg-blue-500/20"><Cpu size={16} className="text-blue-500" /></div>
+                  <span className="text-xs font-bold uppercase tracking-tight" style={{ color: 'var(--text-primary)' }}>AI Inference Engine</span>
                 </div>
                 <span className="text-xs font-bold text-green-600 bg-green-100 px-2 py-1 rounded-md">Running</span>
               </div>
@@ -331,9 +333,11 @@ export default function Dashboard({ setActiveTab }) {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
           {/* Weekly Chart */}
-          <div className="p-6 rounded-2xl shadow-sm border lg:col-span-2" style={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}>
+          <div className="glass-panel p-6 lg:col-span-2 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-3xl -mr-16 -mt-16"></div>
             <h3 className="font-bold mb-6 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-              <Activity size={18} className="text-blue-500" /> Weekly Attendance Analytics
+              <Activity size={18} className="text-blue-500" />
+              <span className="text-xs uppercase tracking-widest">Weekly Attendance Analytics</span>
             </h3>
             <div className="h-[300px]">
               {weeklyData.length > 0 ? (
@@ -363,10 +367,10 @@ export default function Dashboard({ setActiveTab }) {
           <div className="space-y-6">
 
             {/* Live Feed */}
-            <div className="p-5 rounded-2xl shadow-sm border relative overflow-hidden min-h-[200px]" style={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}>
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500"></div>
-              <h3 className="font-bold text-gray-100 mb-4 flex justify-between items-center">
-                <span>Live Recognition Feed</span>
+            <div className="glass-panel p-5 min-h-[200px] relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500 opacity-50"></div>
+              <h3 className="font-bold text-[var(--text-primary)] mb-4 flex justify-between items-center">
+                <span className="text-xs uppercase tracking-widest">Live Recognition Feed</span>
                 <span className="flex h-3 w-3 relative">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-900/300"></span>
@@ -374,12 +378,13 @@ export default function Dashboard({ setActiveTab }) {
               </h3>
               <div className="space-y-3">
                 {liveRecognitions.length > 0 ? liveRecognitions.map(rec => (
-                  <div key={rec.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-800 transition border border-transparent hover:border-gray-800">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-inner ${rec.imgColor || 'bg-gray-400'}`}>
-                      {rec.name === 'Unknown Person' ? '?' : rec?.name?.charAt(0) || 'U'}
+                  <div key={rec.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-[var(--bg-hover)] transition-all border border-transparent hover:border-[var(--border-color)] group">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-inner relative overflow-hidden ${rec.imgColor || 'bg-gray-400'}`}>
+                      <div className="absolute inset-0 bg-black/10"></div>
+                      <span className="relative z-10">{rec.name === 'Unknown Person' ? '?' : rec?.name?.charAt(0) || 'U'}</span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-semibold truncate ${rec.status === 'Alert' ? 'text-red-600' : 'text-gray-100'}`}>{rec.name}</p>
+                      <p className={`text-sm font-bold truncate group-hover:text-[var(--primary-color)] transition-colors ${rec.status === 'Alert' ? 'text-red-600' : 'text-[var(--text-primary)]'}`}>{rec.name}</p>
                       <p className="text-xs text-gray-400 flex items-center gap-1">
                         {rec.time} • {rec.camera}
                       </p>
@@ -396,9 +401,11 @@ export default function Dashboard({ setActiveTab }) {
             </div>
 
             {/* Alerts Panel */}
-            <div className="bg-rose-900/20 p-5 rounded-2xl shadow-sm border border-rose-900/50 min-h-[150px]">
-              <h3 className="font-bold text-rose-300 mb-3 flex items-center gap-2">
-                <ShieldAlert size={18} /> System Alerts
+            <div className="p-5 rounded-2xl shadow-sm border min-h-[150px] relative overflow-hidden" style={{ backgroundColor: 'rgba(225, 29, 72, 0.05)', borderColor: 'rgba(225, 29, 72, 0.2)' }}>
+              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-rose-500/10 blur-2xl rounded-full"></div>
+              <h3 className="font-bold text-rose-500 mb-3 flex items-center gap-2">
+                <ShieldAlert size={18} />
+                <span className="text-xs uppercase tracking-widest">System Alerts</span>
               </h3>
               <div className="space-y-2">
                 {alerts.length > 0 ? alerts.map(alert => (

@@ -153,21 +153,26 @@ const StreamViewer = () => {
   return (
     <div className="stream-viewer">
       {/* Header Controls */}
-      <div className="stream-header">
+      <div className="stream-header glass-panel">
         <div className="header-left">
           <div className="header-title">
-            <Monitor size={24} />
-            <h1>Stream Viewer</h1>
+            <div className="p-2 rounded-lg bg-blue-500/10 text-blue-500">
+              <Monitor size={22} />
+            </div>
+            <h1 className="text-xl font-bold tracking-tight">Stream Viewer</h1>
           </div>
-          <div className="stream-stats">
-            <span className="stat">
-              Total Cameras: <strong>{cameras.length}</strong>
+          <div className="stream-stats flex gap-4 mt-2">
+            <span className="stat flex items-center gap-2 px-3 py-1 rounded-full bg-slate-500/5 border border-slate-500/10">
+              <span className="text-[10px] uppercase tracking-widest font-bold opacity-60">Total:</span>
+              <strong className="text-sm">{cameras.length}</strong>
             </span>
-            <span className="stat">
-              Active Streams: <strong>{activeCameras.length}</strong>
+            <span className="stat flex items-center gap-2 px-3 py-1 rounded-full bg-green-500/5 border border-green-500/10">
+              <span className="text-[10px] uppercase tracking-widest font-bold opacity-60">Active:</span>
+              <strong className="text-sm text-green-500">{activeCameras.length}</strong>
             </span>
-            <span className="stat">
-              Displayed: <strong>{Math.min(activeCameras.length, currentLayout.maxStreams)}</strong>
+            <span className="stat flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/5 border border-blue-500/10">
+              <span className="text-[10px] uppercase tracking-widest font-bold opacity-60">Showing:</span>
+              <strong className="text-sm text-blue-500">{Math.min(activeCameras.length, currentLayout.maxStreams)}</strong>
             </span>
           </div>
         </div>
@@ -243,7 +248,7 @@ const StreamViewer = () => {
             className="video-grid"
             style={{
               gridTemplateColumns: `repeat(${currentLayout.cols}, 1fr)`,
-              gridTemplateRows: `repeat(${currentLayout.rows}, 1fr)`
+              gridAutoRows: 'auto'
             }}
           >
             {convertedCameras.map((camera, index) => (

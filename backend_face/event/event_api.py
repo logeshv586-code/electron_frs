@@ -930,6 +930,20 @@ async def get_attendance_logic(
         
     assigned_cameras = current_user.get("assigned_cameras")
 
+    camera_name_map = load_camera_name_map()
+
+    def get_camera_display_name(camera_id: str) -> str:
+        if camera_id in camera_name_map:
+            return camera_name_map[camera_id]
+        if camera_id.lower() in camera_name_map:
+            return camera_name_map[camera_id.lower()]
+        for cam_key, cam_name in camera_name_map.items():
+            if cam_key.lower() == camera_id.lower():
+                return cam_name
+        if camera_id.lower() == "default":
+            return "Default Camera"
+        return camera_id.replace('_', ' ').title()
+
     # Reuse logic for scanning company directories
     def scan_for_attendance(comp_id, target_dir):
         if not os.path.exists(target_dir):

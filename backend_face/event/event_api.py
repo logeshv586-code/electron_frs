@@ -20,6 +20,28 @@ import base64
 from ws_manager import ws_manager
 import uuid
 
+def resolve_known_metadata(parts, face_file):
+    """
+    Extract person_id and camera_name from known face file path
+    """
+    person_id = None
+    camera_name = None
+    try:
+        # Example path structure: known/companyA/person123/camera1/face_20260314.jpg
+        if len(parts) >= 2:
+            person_id = parts[-2]
+        
+        # Extract camera name from filename if available
+        filename = os.path.basename(face_file)
+        if "_" in filename:
+            camera_name = filename.split("_")[0]
+            
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[ATTENDANCE] metadata parse failed: {e}")
+    return person_id, camera_name
+
 def convert_file_path_to_url(file_path: str) -> str:
     try:
         normalized_path = os.path.normpath(file_path)
@@ -138,8 +160,16 @@ class FaceMatch(BaseModel):
 async def add_known_face(event: FaceEvent):
     """Add a known face event."""
     try:
-        # Create camera directory if it doesn't exist
-        camera_dir = os.path.join(KNOWN_FACES_DIR, "camera_1")
+        company_id = event.company_id or "default"
+        # Create company directory if it doesn't exist
+        company_dir = os.path.join(KNOWN_FACES_DIR, company_id)
+        os.makedirs(company_dir, exist_ok=True)
+        
+        # Use camera from event or default
+        camera_name = "camera_1" # Default fallback
+        # In a real scenario, we'd extract camera from path or event
+        
+        camera_dir = os.path.join(company_dir, camera_name)
         os.makedirs(camera_dir, exist_ok=True)
         
         # Create person directory inside camera directory
@@ -159,14 +189,14 @@ async def add_known_face(event: FaceEvent):
                     "id": str(uuid.uuid4()),
                     "name": event.name,
                     "time": datetime.now().strftime("%H:%M"),
-                    "camera": "Camera 1", # Default or extract from path
+                    "camera": camera_name.replace('_', ' ').title(),
                     "status": "Recognized",
                     "imgColor": "bg-blue-500",
                     "image_url": image_url
                 }
             }
             import asyncio
-            asyncio.create_task(ws_manager.broadcast(payload, event.company_id))
+            asyncio.create_task(ws_manager.broadcast(payload, company_id))
         except Exception as ws_err:
             logger.error(f"Failed to broadcast recognition: {ws_err}")
 
@@ -179,8 +209,15 @@ async def add_known_face(event: FaceEvent):
 async def add_unknown_face(event: FaceEvent):
     """Add an unknown face event."""
     try:
+        company_id = event.company_id or "default"
+        # Create company directory if it doesn't exist
+        company_dir = os.path.join(UNKNOWN_FACES_DIR, company_id)
+        os.makedirs(company_dir, exist_ok=True)
+        
+        camera_name = "camera_1" # Default fallback
+        
         # Create camera directory if it doesn't exist
-        camera_dir = os.path.join(UNKNOWN_FACES_DIR, "camera_1")
+        camera_dir = os.path.join(company_dir, camera_name)
         os.makedirs(camera_dir, exist_ok=True)
         
         # Move the image to the appropriate directory
@@ -196,12 +233,12 @@ async def add_unknown_face(event: FaceEvent):
                     "id": str(uuid.uuid4()),
                     "type": "Unknown Person",
                     "time": datetime.now().strftime("%H:%M"),
-                    "location": "Camera 1",
+                    "location": camera_name.replace('_', ' ').title(),
                     "image_url": image_url
                 }
             }
             import asyncio
-            asyncio.create_task(ws_manager.broadcast(payload, event.company_id))
+            asyncio.create_task(ws_manager.broadcast(payload, company_id))
         except Exception as ws_err:
             logger.error(f"Failed to broadcast alert: {ws_err}")
 
@@ -214,26 +251,55 @@ async def add_unknown_face(event: FaceEvent):
 async def get_cameras(request: Request):
     """Get list of available cameras from both known and unknown directories."""
     current_user = request.scope.get("user", {})
-    # For now, we return all cameras, but could be restricted here as well if cameras were tagged
+    role = current_user.get("role")
+    company_id = current_user.get("company_id", "default")
+    assigned_cameras = current_user.get("assigned_cameras", [])
+    
     cameras = set()
     
-    # Get cameras from known faces directory
-    if os.path.exists(KNOWN_FACES_DIR):
-        known_cameras = [d for d in os.listdir(KNOWN_FACES_DIR) 
-                        if os.path.isdir(os.path.join(KNOWN_FACES_DIR, d)) 
-                        and d.startswith('camera_')]
-        cameras.update(known_cameras)
-    
-    # Get cameras from unknown faces directory
-    if os.path.exists(UNKNOWN_FACES_DIR):
-        unknown_cameras = [d for d in os.listdir(UNKNOWN_FACES_DIR) 
-                          if os.path.isdir(os.path.join(UNKNOWN_FACES_DIR, d)) 
-                          and d.startswith('camera_')]
-        cameras.update(unknown_cameras)
+    def scan_cameras(base_dir, comp_id):
+        target = os.path.join(base_dir, comp_id)
+        if os.path.exists(target):
+            detected = [d for d in os.listdir(target) 
+                       if os.path.isdir(os.path.join(target, d)) 
+                       and d.startswith('camera_')]
+            cameras.update(detected)
+        
+        # Fallback for default
+        if comp_id == "default" and base_dir == KNOWN_FACES_DIR:
+             detected = [d for d in os.listdir(base_dir) 
+                         if os.path.isdir(os.path.join(base_dir, d)) 
+                         and d.startswith('camera_')]
+             cameras.update(detected)
+
+    if role == "SuperAdmin":
+        # Scan all company folders
+        for base in [KNOWN_FACES_DIR, UNKNOWN_FACES_DIR]:
+            if os.path.exists(base):
+                for item in os.listdir(base):
+                    full_path = os.path.join(base, item)
+                    if os.path.isdir(full_path):
+                        if item.startswith('camera_'):
+                            cameras.add(item)
+                        else:
+                            scan_cameras(base, item)
+    else:
+        # Scan specific company
+        scan_cameras(KNOWN_FACES_DIR, company_id)
+        scan_cameras(UNKNOWN_FACES_DIR, company_id)
+
+    # RBAC: Filter by assigned_cameras if provided
+    if assigned_cameras:
+        cameras = {c for c in cameras if c in assigned_cameras}
     
     # Sort cameras numerically
-    sorted_cameras = sorted(list(cameras), 
-                          key=lambda x: int(x.split('_')[1]) if x.split('_')[1].isdigit() else float('inf'))
+    def sort_key(x):
+        parts = x.split('_')
+        if len(parts) > 1 and parts[1].isdigit():
+            return int(parts[1])
+        return 999
+
+    sorted_cameras = sorted(list(cameras), key=sort_key)
     
     return {"cameras": sorted_cameras}
 
@@ -346,85 +412,183 @@ async def filter_faces_logic(
             return "Default Camera"
         return camera_id.replace('_', ' ').title()
 
-    def process_directory(base_dir: str, directory_type: str):
-        if face_type_filter and face_type_filter != directory_type:
-            return []
+def process_company_directory(company_dir: str, company_id: str, face_type_filter: Optional[str], from_date_obj: Optional[datetime.date], to_date_obj: Optional[datetime.date], name_filter: Optional[str], camera_filter: Optional[str], camera_name_map: Dict[str, str], assigned_cameras: Optional[List[str]] = None) -> List[Dict]:
+    """Helper to process events within a specific company directory."""
+    faces = []
+    
+    timestamp_regex = re.compile(r"(\d{8}_\d{6}(?:_\d{3,6})?)")
 
-        # ── Determine which directories to scan ──────────────────
-        if company_id is None:
-            # SuperAdmin: scan every company subdirectory
-            if not os.path.exists(base_dir):
-                return []
-            dirs_to_scan = [
-                entry.path
-                for entry in os.scandir(base_dir)
-                if entry.is_dir()
-            ]
-            if not dirs_to_scan:
-                return []
+    def extract_timestamp(face_file: str, img_path: str) -> datetime:
+        match = timestamp_regex.search(face_file)
+        if match:
+            raw = match.group(1)
+            for fmt in ("%Y%m%d_%H%M%S_%f", "%Y%m%d_%H%M%S"):
+                try:
+                    return datetime.strptime(raw, fmt)
+                except ValueError:
+                    continue
+        try:
+            return datetime.fromtimestamp(os.path.getmtime(img_path))
+        except Exception:
+            return datetime.utcnow()
+
+    def resolve_known_metadata(parts: List[str], face_file: str) -> tuple[str, str]:
+        image_name = parts[-1] if parts else face_file
+        if len(parts) >= 3:
+            return parts[1], parts[0]
+        if len(parts) >= 2:
+            person = parts[-2]
+            camera_name = parts[0] if parts[0].lower().startswith("camera_") else "default"
+            return person, camera_name
+        base_name = os.path.splitext(image_name)[0]
+        match = timestamp_regex.search(base_name)
+        if match:
+            person = base_name[:match.start()].rstrip('_') or "Unknown"
         else:
-            # Regular tenant: scope to their directory only
-            tenant_dir = os.path.join(base_dir, company_id)
-            if not os.path.exists(tenant_dir):
-                # Legacy fallback for "default" company
-                if company_id == "default":
-                    tenant_dir = base_dir
+            splits = base_name.split('_')
+            person = splits[0] if splits else base_name
+        return person, "default"
+
+    def resolve_unknown_metadata(parts: List[str]) -> str:
+        if len(parts) >= 2:
+            return parts[0]
+        return "default"
+
+    def get_camera_display_name(camera_id: str) -> str:
+        if camera_id in camera_name_map:
+            return camera_name_map[camera_id]
+        if camera_id.lower() in camera_name_map:
+            return camera_name_map[camera_id.lower()]
+        for cam_key, cam_name in camera_name_map.items():
+            if cam_key.lower() == camera_id.lower():
+                return cam_name
+        if camera_id.lower() == "default":
+            return "Default Camera"
+        return camera_id.replace('_', ' ').title()
+
+    # Determine directory types to scan
+    dir_types = ["known", "unknown"]
+    if face_type_filter:
+        dir_types = [face_type_filter]
+
+    for directory_type in dir_types:
+        scan_base = KNOWN_FACES_DIR if directory_type == "known" else UNKNOWN_FACES_DIR
+        # Narrow down to company directory
+        target_dir = os.path.join(scan_base, company_id)
+        
+        if not os.path.exists(target_dir):
+            # Legacy fallback: if company_id is "default", try the root
+            if company_id == "default" and os.path.exists(scan_base):
+                target_dir = scan_base
+            else:
+                continue
+
+        for root_dir, _, files in os.walk(target_dir):
+            # Skip recursion into other company folders if we're at the root of KNOWN_FACES_DIR
+            if company_id == "default" and target_dir == scan_base:
+                rel = os.path.relpath(root_dir, scan_base)
+                if rel != "." and rel.split(os.sep)[0] not in ["camera_1", "camera_2", "camera_3", "default"]:
+                    # This looks like it might be another company's folder
+                    continue
+
+            for face_file in files:
+                if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                    continue
+                img_path = os.path.join(root_dir, face_file)
+                
+                timestamp = extract_timestamp(face_file, img_path)
+                timestamp_date = timestamp.date()
+                if from_date_obj and timestamp_date < from_date_obj:
+                    continue
+                if to_date_obj and timestamp_date > to_date_obj:
+                    continue
+
+                relative_path = os.path.relpath(img_path, target_dir)
+                parts = relative_path.split(os.sep)
+
+                if directory_type == "known":
+                    person_name, camera_name = resolve_known_metadata(parts, face_file)
+                    if name_filter and name_filter not in person_name.lower():
+                        continue
                 else:
-                    return []
-            if not os.path.exists(tenant_dir):
-                return []
-            dirs_to_scan = [tenant_dir]
-
-        # ── Walk each directory ───────────────────────────────────
-        faces = []
-        for scan_dir in dirs_to_scan:
-            for root_dir, _, files in os.walk(scan_dir):
-                for face_file in files:
-                    if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                        continue
-                    img_path = os.path.join(root_dir, face_file)
-                    if not os.path.isfile(img_path):
+                    camera_name = resolve_unknown_metadata(parts)
+                    person_name = "Unknown"
+                    if name_filter and name_filter not in "unknown":
                         continue
 
-                    timestamp = extract_timestamp(face_file, img_path)
-                    timestamp_date = timestamp.date()
-                    if from_date_obj and timestamp_date < from_date_obj:
-                        continue
-                    if to_date_obj and timestamp_date > to_date_obj:
-                        continue
+                mapped_camera_name = get_camera_display_name(camera_name)
 
-                    # Path relative to scan_dir (not base_dir) so
-                    # resolve_*_metadata always gets [camera, person, file]
-                    relative_path = os.path.relpath(img_path, scan_dir)
-                    parts = relative_path.split(os.sep)
-
-                    if directory_type == "known":
-                        person_name, camera_name = resolve_known_metadata(parts, face_file)
-                        if name_filter and name_filter not in person_name.lower():
-                            continue
-                    else:
-                        camera_name = resolve_unknown_metadata(parts)
-                        person_name = "Unknown"
-                        if name_filter and name_filter not in "unknown":
-                            continue
-
-                    mapped_camera_name = get_camera_display_name(camera_name)
-
-                    if camera and camera != "all_cameras" and mapped_camera_name != camera:
+                # RBAC: If user has assigned_cameras, only show those unless it's "all_cameras" or SuperAdmin logic already handled it
+                if assigned_cameras:
+                    # check if camera slug or display name matches any of the assigned IDs
+                    if camera_name not in assigned_cameras and mapped_camera_name not in assigned_cameras:
                         continue
 
-                    faces.append({
-                        "name": person_name,
-                        "image_path": convert_file_path_to_url(img_path),
-                        "timestamp": timestamp.isoformat(),
-                        "type": directory_type,
-                        "camera": mapped_camera_name
-                    })
-        return faces
+                if camera_filter and camera_filter != "all_cameras" and mapped_camera_name != camera_filter:
+                    continue
 
+                faces.append({
+                    "name": person_name,
+                    "image_path": convert_file_path_to_url(img_path),
+                    "timestamp": timestamp.isoformat(),
+                    "type": directory_type,
+                    "camera": mapped_camera_name,
+                    "company_id": company_id
+                })
+    return faces
+
+async def filter_faces_logic(
+    request: Optional[Request] = None,
+    name: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    camera: Optional[str] = "all_cameras",
+    face_type: Optional[str] = None
+):
+    current_user = request.scope.get("user", {}) if request else {}
+    role = current_user.get("role")
+    # SuperAdmin should see all companies
+    if role == "SuperAdmin":
+        company_id = None
+    else:
+        company_id = current_user.get("company_id", "default")
+    
+    name_filter = name.lower().strip() if name and isinstance(name, str) else None
+    from_date_obj = None
+    to_date_obj = None
+
+    try:
+        if from_date:
+            from_date_obj = datetime.strptime(from_date, "%Y-%m-%d").date()
+        if to_date:
+            to_date_obj = datetime.strptime(to_date, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date format.")
+
+    camera_name_map = load_camera_name_map()
     matching_faces = []
-    matching_faces.extend(process_directory(KNOWN_FACES_DIR, "known"))
-    matching_faces.extend(process_directory(UNKNOWN_FACES_DIR, "unknown"))
+
+    assigned_cameras = current_user.get("assigned_cameras")
+
+    if company_id is None:
+        # SUPERADMIN → scan all company directories
+        if os.path.exists(KNOWN_FACES_DIR):
+            companies = [d for d in os.listdir(KNOWN_FACES_DIR) if os.path.isdir(os.path.join(KNOWN_FACES_DIR, d))]
+            for comp in companies:
+                if comp.startswith("camera_") or comp == "__pycache__":
+                    continue
+                matching_faces.extend(process_company_directory(
+                    os.path.join(KNOWN_FACES_DIR, comp), comp, face_type, from_date_obj, to_date_obj, name_filter, camera, camera_name_map, assigned_cameras
+                ))
+            if "default" not in companies:
+                matching_faces.extend(process_company_directory(
+                    KNOWN_FACES_DIR, "default", face_type, from_date_obj, to_date_obj, name_filter, camera, camera_name_map, assigned_cameras
+                ))
+    else:
+        # NORMAL TENANT
+        matching_faces.extend(process_company_directory(
+            os.path.join(KNOWN_FACES_DIR, company_id), company_id, face_type, from_date_obj, to_date_obj, name_filter, camera, camera_name_map, assigned_cameras
+        ))
 
     matching_faces.sort(key=lambda item: item["timestamp"], reverse=True)
     return matching_faces
@@ -438,9 +602,13 @@ async def get_directories():
     }
 
 @router.post("/match-face")
-async def match_face(image: UploadFile = File(...)):
+async def match_face(request: Request, image: UploadFile = File(...)):
     """Match a face against the database of known faces."""
     try:
+        current_user = request.scope.get("user", {})
+        role = current_user.get("role")
+        company_id = current_user.get("company_id", "default")
+        
         # Read and process the uploaded image
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
@@ -461,55 +629,76 @@ async def match_face(image: UploadFile = File(...)):
         # Find matching faces
         matching_faces = []
         
-        # Walk through known faces directory
-        for root, dirs, files in os.walk(KNOWN_FACES_DIR):
-            for file in files:
-                if file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                    try:
-                        # Load and process each image
-                        img_path = os.path.join(root, file)
-                        known_img = cv2.imread(img_path)
-                        if known_img is None:
-                            continue
-                            
-                        known_img_rgb = cv2.cvtColor(known_img, cv2.COLOR_BGR2RGB)
-                        known_face_locations = face_recognition.face_locations(known_img_rgb)
-                        
-                        if known_face_locations:
-                            known_face_encodings = face_recognition.face_encodings(known_img_rgb, known_face_locations)
-                            
-                            # Compare with uploaded face
-                            for known_face_encoding in known_face_encodings:
-                                # Compare faces
-                                matches = face_recognition.compare_faces([face_encoding], known_face_encoding, tolerance=0.5)
-                                if matches[0]:
-                                    # Calculate face distance (lower is better)
-                                    face_distance = face_recognition.face_distance([face_encoding], known_face_encoding)[0]
-                                    confidence = 1 - face_distance
-                                    
-                                    # Only include matches with confidence >= 50%
-                                    if confidence >= 0.53:
-                                        # Get person name from directory structure
-                                        person_name = os.path.basename(os.path.dirname(img_path))
-                                        
-                                        # Get timestamp from filename
-                                        timestamp_str = file.split('_', 1)[1].rsplit('.', 1)[0]
-                                        try:
-                                            timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-                                        except ValueError:
-                                            timestamp = datetime.fromtimestamp(os.path.getctime(img_path))
-                                        
-                                        matching_faces.append(FaceMatch(
-                                            image_path=convert_file_path_to_url(img_path),
-                                            name=person_name,
-                                            confidence=float(confidence),
-                                            timestamp=timestamp.isoformat()
-                                        ))
-                                    break  # Found a match for this image, move to next
-                                    
-                    except Exception as e:
-                        logger.error(f"Error processing {file}: {str(e)}")
+        # Determine paths to scan
+        scan_paths = []
+        if role == "SuperAdmin":
+            scan_paths.append(KNOWN_FACES_DIR)
+        else:
+            company_path = os.path.join(KNOWN_FACES_DIR, company_id)
+            if os.path.exists(company_path):
+                scan_paths.append(company_path)
+            # Fallback for default
+            if company_id == "default" and KNOWN_FACES_DIR not in scan_paths:
+                scan_paths.append(KNOWN_FACES_DIR)
+
+        # Walk through directories
+        for base_path in scan_paths:
+            for root, dirs, files in os.walk(base_path):
+                # Skip other company folders if at root
+                if base_path == KNOWN_FACES_DIR and role != "SuperAdmin":
+                    rel = os.path.relpath(root, KNOWN_FACES_DIR)
+                    if rel != "." and rel.split(os.sep)[0] not in ["camera_1", "camera_2", "camera_3", "default"]:
                         continue
+
+                for file in files:
+                    if file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                        try:
+                            # Load and process each image
+                            img_path = os.path.join(root, file)
+                            known_img = cv2.imread(img_path)
+                            if known_img is None:
+                                continue
+                                
+                            known_img_rgb = cv2.cvtColor(known_img, cv2.COLOR_BGR2RGB)
+                            known_face_locations = face_recognition.face_locations(known_img_rgb)
+                            
+                            if known_face_locations:
+                                known_face_encodings = face_recognition.face_encodings(known_img_rgb, known_face_locations)
+                                
+                                # Compare with uploaded face
+                                for known_face_encoding in known_face_encodings:
+                                    # Compare faces
+                                    matches = face_recognition.compare_faces([face_encoding], known_face_encoding, tolerance=0.5)
+                                    if matches[0]:
+                                        # Calculate face distance (lower is better)
+                                        face_distance = face_recognition.face_distance([face_encoding], known_face_encoding)[0]
+                                        confidence = 1 - face_distance
+                                        
+                                        # Only include matches with confidence >= 50%
+                                        if confidence >= 0.53:
+                                            # Get person name from directory structure
+                                            person_name = os.path.basename(os.path.dirname(img_path))
+                                            
+                                            # Get timestamp from filename
+                                            timestamp_str = file.split('_', 1)[1].rsplit('.', 1)[0] if '_' in file else None
+                                            try:
+                                                if timestamp_str:
+                                                    timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                                                else:
+                                                    timestamp = datetime.fromtimestamp(os.path.getctime(img_path))
+                                            except ValueError:
+                                                timestamp = datetime.fromtimestamp(os.path.getctime(img_path))
+                                            
+                                            matching_faces.append(FaceMatch(
+                                                image_path=convert_file_path_to_url(img_path),
+                                                name=person_name,
+                                                confidence=float(confidence),
+                                                timestamp=timestamp.isoformat()
+                                            ))
+                                        break  # Found a match for this image, move to next
+                        except Exception as e:
+                            logger.error(f"Error processing {file}: {str(e)}")
+                            continue
         
         # Sort matching faces by confidence (highest first)
         matching_faces.sort(key=lambda x: x.confidence, reverse=True)
@@ -521,9 +710,13 @@ async def match_face(image: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/match-face-unknown")
-async def match_face_unknown(image: UploadFile = File(...)):
+async def match_face_unknown(request: Request, image: UploadFile = File(...)):
     """Match a face against the database of unknown faces."""
     try:
+        current_user = request.scope.get("user", {})
+        role = current_user.get("role")
+        company_id = current_user.get("company_id", "default")
+        
         # Read and process the uploaded image
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
@@ -544,60 +737,84 @@ async def match_face_unknown(image: UploadFile = File(...)):
         # Find matching faces
         matching_faces = []
         
+        # Determine paths to scan
+        scan_paths = []
+        if role == "SuperAdmin":
+            scan_paths.append(UNKNOWN_FACES_DIR)
+        else:
+            company_path = os.path.join(UNKNOWN_FACES_DIR, company_id)
+            if os.path.exists(company_path):
+                scan_paths.append(company_path)
+            # Fallback for default
+            if company_id == "default" and UNKNOWN_FACES_DIR not in scan_paths:
+                scan_paths.append(UNKNOWN_FACES_DIR)
+
         # Walk through unknown faces directory
-        for root, dirs, files in os.walk(UNKNOWN_FACES_DIR):
-            for file in files:
-                if file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                    try:
-                        # Load and process each image
-                        img_path = os.path.join(root, file)
-                        unknown_img = cv2.imread(img_path)
-                        if unknown_img is None:
-                            continue
-                            
-                        unknown_img_rgb = cv2.cvtColor(unknown_img, cv2.COLOR_BGR2RGB)
-                        unknown_face_locations = face_recognition.face_locations(unknown_img_rgb)
-                        
-                        if unknown_face_locations:
-                            unknown_face_encodings = face_recognition.face_encodings(unknown_img_rgb, unknown_face_locations)
-                            
-                            # Compare with uploaded face
-                            for unknown_face_encoding in unknown_face_encodings:
-                                # Compare faces
-                                matches = face_recognition.compare_faces([face_encoding], unknown_face_encoding, tolerance=0.5)
-                                if matches[0]:
-                                    # Calculate face distance (lower is better)
-                                    face_distance = face_recognition.face_distance([face_encoding], unknown_face_encoding)[0]
-                                    confidence = 1 - face_distance
-                                    
-                                    # Only include matches with confidence >= 50%
-                                    if confidence >= 0.53:
-                                        # Get camera name from directory structure (if available)
-                                        relative_path = os.path.relpath(img_path, UNKNOWN_FACES_DIR)
-                                        parts = relative_path.split(os.sep)
-                                        camera_name = parts[0] if len(parts) >= 2 else "default"
-                                        
-                                        # Get timestamp from filename
-                                        timestamp_str = file.split('_', 1)[1].rsplit('.', 1)[0] if '_' in file else None
-                                        try:
-                                            if timestamp_str:
-                                                timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-                                            else:
-                                                timestamp = datetime.fromtimestamp(os.path.getctime(img_path))
-                                        except ValueError:
-                                            timestamp = datetime.fromtimestamp(os.path.getctime(img_path))
-                                        
-                                        matching_faces.append(FaceMatch(
-                                            image_path=convert_file_path_to_url(img_path),
-                                            name="Unknown",
-                                            confidence=float(confidence),
-                                            timestamp=timestamp.isoformat()
-                                        ))
-                                    break  # Found a match for this image, move to next
-                                    
-                    except Exception as e:
-                        logger.error(f"Error processing {file}: {str(e)}")
+        for base_path in scan_paths:
+            for root, dirs, files in os.walk(base_path):
+                # Skip other company folders if at root
+                if base_path == UNKNOWN_FACES_DIR and role != "SuperAdmin":
+                    rel = os.path.relpath(root, UNKNOWN_FACES_DIR)
+                    if rel != "." and rel.split(os.sep)[0] not in ["camera_1", "camera_2", "camera_3", "default"]:
                         continue
+
+                for file in files:
+                    if file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                        try:
+                            # Load and process each image
+                            img_path = os.path.join(root, file)
+                            unknown_img = cv2.imread(img_path)
+                            if unknown_img is None:
+                                continue
+                                
+                            unknown_img_rgb = cv2.cvtColor(unknown_img, cv2.COLOR_BGR2RGB)
+                            unknown_face_locations = face_recognition.face_locations(unknown_img_rgb)
+                            
+                            if unknown_face_locations:
+                                unknown_face_encodings = face_recognition.face_encodings(unknown_img_rgb, unknown_face_locations)
+                                
+                                # Compare with uploaded face
+                                for unknown_face_encoding in unknown_face_encodings:
+                                    # Compare faces
+                                    matches = face_recognition.compare_faces([face_encoding], unknown_face_encoding, tolerance=0.5)
+                                    if matches[0]:
+                                        # Calculate face distance (lower is better)
+                                        face_distance = face_recognition.face_distance([face_encoding], unknown_face_encoding)[0]
+                                        confidence = 1 - face_distance
+                                        
+                                        # Only include matches with confidence >= 50%
+                                        if confidence >= 0.53:
+                                            # Get camera name from directory structure (if available)
+                                            target_dir = UNKNOWN_FACES_DIR
+                                            if role != "SuperAdmin":
+                                                target_dir = os.path.join(UNKNOWN_FACES_DIR, company_id)
+                                                if not os.path.exists(target_dir):
+                                                    target_dir = UNKNOWN_FACES_DIR
+
+                                            relative_path = os.path.relpath(img_path, target_dir)
+                                            parts = relative_path.split(os.sep)
+                                            camera_name = parts[0] if len(parts) >= 2 else "default"
+                                            
+                                            # Get timestamp from filename
+                                            timestamp_str = file.split('_', 1)[1].rsplit('.', 1)[0] if '_' in file else None
+                                            try:
+                                                if timestamp_str:
+                                                    timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                                                else:
+                                                    timestamp = datetime.fromtimestamp(os.path.getctime(img_path))
+                                            except ValueError:
+                                                timestamp = datetime.fromtimestamp(os.path.getctime(img_path))
+                                            
+                                            matching_faces.append(FaceMatch(
+                                                image_path=convert_file_path_to_url(img_path),
+                                                name="Unknown",
+                                                confidence=float(confidence),
+                                                timestamp=timestamp.isoformat()
+                                            ))
+                                        break  # Found a match for this image, move to next
+                        except Exception as e:
+                            logger.error(f"Error processing {file}: {str(e)}")
+                            continue
         
         # Sort matching faces by confidence (highest first)
         matching_faces.sort(key=lambda x: x.confidence, reverse=True)
@@ -647,10 +864,21 @@ async def get_attendance_logic(
             if k != "persons" and isinstance(v, dict) and 'name' in v:
                 persons[k] = v
 
-    # SaaS Filter: Only show employees created by this user (if not SuperAdmin)
-    if current_user.get("role") != "SuperAdmin":
-        username = current_user.get("username")
-        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
+    # SaaS Filter: Company visibility
+    role = current_user.get("role")
+    company_id = current_user.get("company_id")
+
+    if role == "SuperAdmin":
+        # SuperAdmin sees everyone
+        pass
+    else:
+        # Admins and Supervisors see everyone in their own company
+        if company_id:
+            persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == company_id}
+        else:
+            # Fallback for users without company_id (legacy)
+            username = current_user.get("username")
+            persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username or pdata.get("company_id") == "default"}
 
     # Build attendance dictionary
     attendance_records = {}
@@ -695,14 +923,29 @@ async def get_attendance_logic(
     MIN_HOURS_PRESENT = settings.get("min_hours_present", 4.0)
 
     # Scan KNOWN_FACES_DIR
-    current_user = request.scope.get("user", {})
+    role = current_user.get("role")
     company_id = current_user.get("company_id")
-    
-    # Restrict search base if company_id is provided
-    known_search_base = os.path.join(KNOWN_FACES_DIR, company_id) if company_id else KNOWN_FACES_DIR
+    if role == "SuperAdmin":
+        company_id = None
+        
+    assigned_cameras = current_user.get("assigned_cameras")
 
-    if os.path.exists(known_search_base):
-        for root_dir, _, files in os.walk(known_search_base):
+    # Reuse logic for scanning company directories
+    def scan_for_attendance(comp_id, target_dir):
+        if not os.path.exists(target_dir):
+            # Fallback for default
+            if comp_id == "default" and os.path.exists(KNOWN_FACES_DIR):
+                target_dir = KNOWN_FACES_DIR
+            else:
+                return
+
+        for root_dir, _, files in os.walk(target_dir):
+            # Skip other company folders if at root
+            if comp_id == "default" and target_dir == KNOWN_FACES_DIR:
+                rel = os.path.relpath(root_dir, KNOWN_FACES_DIR)
+                if rel != "." and rel.split(os.sep)[0] not in ["camera_1", "camera_2", "camera_3", "default"]:
+                    continue
+
             for face_file in files:
                 if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
@@ -712,16 +955,34 @@ async def get_attendance_logic(
                 if ts.date() != target_date_obj:
                     continue
                 
-                relative_path = os.path.relpath(img_path, known_search_base)
+                relative_path = os.path.relpath(img_path, target_dir)
                 parts = relative_path.split(os.sep)
                 
-                if len(parts) >= 2:
-                    person_id = parts[-2]
-                else:
-                    person_id = "unknown"
+                # Resolve camera and person
+                person_id, camera_name = resolve_known_metadata(parts, face_file)
+                mapped_camera_name = get_camera_display_name(camera_name)
+
+                # RBAC: Assigned Cameras check
+                if assigned_cameras:
+                    if camera_name not in assigned_cameras and mapped_camera_name not in assigned_cameras:
+                        continue
                     
                 if person_id in attendance_records:
                     attendance_records[person_id]["events"].append(ts)
+
+    if company_id is None:
+        # SuperAdmin: scan all
+        if os.path.exists(KNOWN_FACES_DIR):
+            companies = [d for d in os.listdir(KNOWN_FACES_DIR) if os.path.isdir(os.path.join(KNOWN_FACES_DIR, d))]
+            for comp in companies:
+                if comp.startswith("camera_") or comp == "__pycache__":
+                    continue
+                scan_for_attendance(comp, os.path.join(KNOWN_FACES_DIR, comp))
+            if "default" not in companies:
+                scan_for_attendance("default", KNOWN_FACES_DIR)
+    else:
+        # Specific company
+        scan_for_attendance(company_id, os.path.join(KNOWN_FACES_DIR, company_id))
 
     # Calculate Punch In / Out and Working Hours
     result_list = []
@@ -947,9 +1208,10 @@ async def get_dashboard_stats_logic(
         absent = total_employees - present
         late = sum(1 for r in records if r.get("is_late", False))
         
+        assigned_cameras = current_user.get("assigned_cameras")
+
         # 3. Cameras Active
-        # For now, count cameras from data/camera_management/cameras.json that match company (if possible)
-        # Or just return a count from the data directory
+        # Count cameras from data/camera_management/cameras.json that match company and assigned_cameras
         cameras_active = 0
         try:
             backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -957,10 +1219,16 @@ async def get_dashboard_stats_logic(
             if os.path.exists(cameras_file):
                 with open(cameras_file, 'r') as f:
                     cameras = json.load(f)
+                    
+                    filtered_cameras = cameras
                     if company_id:
-                        cameras_active = sum(1 for c in cameras if c.get("company_id") == company_id and c.get("status") == "active")
-                    else:
-                        cameras_active = sum(1 for c in cameras if c.get("status") == "active")
+                        filtered_cameras = [c for c in filtered_cameras if c.get("company_id") == company_id]
+                    
+                    if assigned_cameras:
+                        # Map assigned camera IDs/names to those in the config
+                        filtered_cameras = [c for c in filtered_cameras if c.get("id") in assigned_cameras or c.get("name") in assigned_cameras]
+                        
+                    cameras_active = sum(1 for c in filtered_cameras if c.get("status") == "active")
         except Exception as e:
             logger.warning(f"Error counting active cameras: {e}")
 

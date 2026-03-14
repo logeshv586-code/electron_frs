@@ -657,6 +657,86 @@ textarea {
   animation: slideUp 0.4s ease;
 }
 
+/* Disconnected Server State */
+.loading-container.disconnected {
+  text-align: center;
+  background: radial-gradient(circle at center, rgba(15, 23, 42, 0.8) 0%, rgba(11, 17, 32, 1) 100%);
+  padding: 40px;
+}
+
+.loading-container.disconnected .error-icon {
+  font-size: 64px;
+  margin-bottom: 24px;
+  filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.3));
+}
+
+.loading-container.disconnected h2 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, #f8fafc 0%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.loading-container.disconnected p {
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+  max-width: 500px;
+  margin: 0 auto 12px auto;
+}
+
+.loading-container.disconnected .hint {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-family: monospace;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 16px;
+  border-radius: 8px;
+  margin-bottom: 32px;
+}
+
+.error-actions {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.retry-button {
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  padding: 12px 28px;
+  border-radius: 99px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-bounce);
+  box-shadow: 0 4px 15px rgba(14, 165, 233, 0.3);
+}
+
+.retry-button:hover {
+  transform: translateY(-2px);
+  background: var(--primary-hover);
+  box-shadow: 0 6px 20px rgba(14, 165, 233, 0.4);
+}
+
+.settings-button {
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-primary);
+  border: 1px solid var(--sidebar-border);
+  padding: 12px 28px;
+  border-radius: 99px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-normal);
+}
+
+.settings-button:hover {
+  background: rgba(148, 163, 184, 0.2);
+  border-color: var(--text-secondary);
+}
+
 /* Modal */
 .modal-overlay {
   position: fixed;

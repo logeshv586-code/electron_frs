@@ -1031,6 +1031,10 @@ def generate_mjpeg_stream(stream_id: str):
                     processed_frame, detections = process_frame(
                         frame, stream_id=stream_id, company_id=stream_company_id
                     )
+                    # Broad diagnostic: Are we detecting anything?
+                    if detections:
+                        logger.info(f"[BBOX-MAIN-PRE] Detected {len(detections)} faces. Toggle={show_bounding_box}")
+                    
                     # Only render when faces were actually detected in THIS frame.
                     # An empty list or None means no faces – skip entirely.
                     if show_bounding_box and detections:

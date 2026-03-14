@@ -8,7 +8,10 @@ from collections import defaultdict
 import threading
 import os
 import time
+import logging
 from save_face import save_face_image
+
+logger = logging.getLogger(__name__)
 
 # Tuning constants
 TOLERANCE = 0.48  # Reduced from 0.55 to prevent false positives when 1 reference image exists
@@ -47,7 +50,7 @@ tracking_lock = threading.Lock()  # Thread-safe access to tracking data
 # Tracking parameters
 IOU_THRESHOLD = 0.3  # Minimum IoU to match detections to tracked persons
 MAX_TRACK_AGE_FRAMES = 30  # Remove tracks not seen for this many frames
-MAX_TRACK_AGE_SECONDS = 2.0  # Remove tracks not seen for this many seconds
+MAX_TRACK_AGE_SECONDS = 1.5  # Reduced from 2.0 to match user request for persistence
 
 
 def _calculate_face_quality(face_crop: np.ndarray, det_conf: float = 0.0) -> float:
@@ -436,14 +439,13 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
                 company_id = s_info.get('company_id')
         except Exception:
             pass
-            
-    # Get appropriate embeddings for this company
+    
+    # Load embeddings for this company
     if company_id:
         embeddings = load_company_embeddings(company_id)
     else:
         with embedding_lock:
             embeddings = company_embeddings.get("_global", {"encodings": [], "names": []})
-            
     current_known_encodings = embeddings.get("encodings", [])
     current_known_names = embeddings.get("names", [])
     
@@ -482,7 +484,10 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
         new_w, new_h = original_w, original_h
 
     h, w = new_h, new_w
+    logger.debug(f"[FACE_PIPE] Processing frame: {w}x{h}, stream_id={stream_id}")
     faces = current_face_app.get(scaled_frame)
+    if len(faces) > 0:
+        logger.info(f"[FACE_PIPE] Found {len(faces)} faces in raw detection")
     detections: List[Dict[str, Any]] = []
     
     # Get tracks for this stream (ensure it exists)
@@ -629,126 +634,139 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
             else:
                 # Recognition failed - keep current name (persisted known name or "Unknown")
                 conf = det_conf
-        else:
-            # No encoding or no known faces - keep current name (persisted known name or "Unknown")
-            conf = det_conf
-        
-        # Update or create tracking entry
+
+        # Reconstruction of missing logic: Person tracking, quality check, and saving decision
+        face_quality = _calculate_face_quality(face_crop_bgr, det_conf)
+        should_save = False
+        face_crop_to_save = face_crop_bgr
+        save_label = name
+
         if stream_id:
+            # Thread-safe tracking update
             with tracking_lock:
-                if matched_track_id is not None:
-                    # Update existing track
-                    track_info = tracks[matched_track_id]
-                    track_info['bbox'] = current_bbox
-                    track_info['last_seen'] = current_time
-                    # Update name only if we recognized a known person (never change from known to Unknown)
-                    if recognized_name and recognized_name != "Unknown":
-                        track_info['name'] = recognized_name
-                    # Update encoding if available
-                    if face_encoding is not None:
-                        track_info['encoding'] = face_encoding
-                else:
-                    # Create new track
-                    track_id = track_id_counter[stream_id]
+                if matched_track_id is None:
+                    # New person/track
                     track_id_counter[stream_id] += 1
-                    tracks[track_id] = {
-                        'name': name,  # Can be "Unknown" initially, but will be updated if recognized
+                    new_track_id = track_id_counter[stream_id]
+                    person_tracking[stream_id][new_track_id] = {
+                        'name': name,
                         'bbox': current_bbox,
                         'last_seen': current_time,
-                        'frame_count': current_frame_count,
-                        'encoding': face_encoding if face_encoding is not None else None
+                        'frame_count': 1,
+                        'encoding': face_encoding
                     }
+                    matched_track_id = new_track_id
+                else:
+                    # Update existing track
+                    track_info = person_tracking[stream_id][matched_track_id]
+                    track_info['bbox'] = current_bbox
+                    track_info['last_seen'] = current_time
+                    track_info['frame_count'] += 1
+                    # If we just recognized a previously unknown track, update it
+                    if track_info['name'] == "Unknown" and name != "Unknown":
+                        track_info['name'] = name
+                    if face_encoding is not None:
+                        track_info['encoding'] = face_encoding
 
-        # Save face crop asynchronously to avoid blocking frame processing
-        # Extract tight face crop with 50% padding for clean headshot
-        face_crop_to_save = _extract_face_crop(frame_bgr, (x1, y1, x2, y2), padding=0.5)
-        
-        if face_crop_to_save is not None:
-            # Calculate face quality score
-            face_quality = _calculate_face_quality(face_crop_to_save, det_conf)
+            # Saving decision based on quality and frequency
+            person_key = f"{name}_{matched_track_id}" if name != "Unknown" else f"Unknown_{matched_track_id}"
             
-            # Check if this is a better quality capture than what we already have
-            save_label = name if name != "Unknown" else "unknown"
-            
-            # STRIKE: Hard reject low quality, blurry, or tiny faces.
-            should_save = face_quality >= 0.35 and det_conf >= 0.55
-            
-            if stream_id and should_save:
-                person_key = save_label
-                with tracking_lock:
-                    if person_key in best_face_quality.get(stream_id, {}):
-                        prev = best_face_quality[stream_id][person_key]
-                        time_since = current_time - prev.get('timestamp', 0)
-                        
-                        # Reset tracking if person hasn't been seen for a while
-                        if time_since > BEST_QUALITY_RESET_SECONDS:
-                            best_face_quality[stream_id][person_key] = {
-                                'quality': face_quality,
-                                'timestamp': current_time
-                            }
-                        elif face_quality > prev.get('quality', 0):
-                            # Better quality found - save this one
-                            best_face_quality[stream_id][person_key] = {
-                                'quality': face_quality,
-                                'timestamp': current_time
-                            }
-                        else:
-                            # Not better quality, skip
-                            should_save = False
-                    else:
-                        # First detection of this person
-                        if stream_id not in best_face_quality:
-                            best_face_quality[stream_id] = {}
+            # Check if we have a better quality face for this person-track in this window
+            with tracking_lock:
+                best_record = best_face_quality[stream_id].get(person_key)
+                
+                if best_record:
+                    # Reset best quality after time threshold to allow new captures
+                    if current_time - best_record['timestamp'] > BEST_QUALITY_RESET_SECONDS:
+                        should_save = True
                         best_face_quality[stream_id][person_key] = {
                             'quality': face_quality,
                             'timestamp': current_time
                         }
-            
-            if should_save:
-                # Make a safe copy for the thread
-                face_copy = face_crop_to_save.copy()
-                camera_name_to_save = stream_id or "default"
-                if stream_id:
-                    try:
-                        from camera_management.streaming import get_stream_manager
-                        s_info = get_stream_manager().get_stream_info(stream_id)
-                        if s_info and 'camera_name' in s_info:
-                            camera_name_to_save = s_info['camera_name']
-                    except Exception as e:
-                        print(f"Failed to lookup camera_name/company_id for {stream_id}: {e}")
-                
-                company_id_to_save = None
-                if stream_id:
-                    try:
-                        from camera_management.streaming import get_stream_manager
-                        s_info = get_stream_manager().get_stream_info(stream_id)
-                        if s_info and 'company_id' in s_info:
-                            company_id_to_save = s_info['company_id']
-                    except Exception as e:
-                        print(f"Failed to lookup company_id for {stream_id}: {e}")
+                    elif face_quality > best_record['quality'] + 0.05: # Significant improvement
+                        should_save = True
+                        best_face_quality[stream_id][person_key] = {
+                            'quality': face_quality,
+                            'timestamp': current_time
+                        }
+                    else:
+                        should_save = False
+                else:
+                    # First detection of this person-track
+                    should_save = True
+                    best_face_quality[stream_id][person_key] = {
+                        'quality': face_quality,
+                        'timestamp': current_time
+                    }
+        else:
+            # Fallback for streams without ID (less common)
+            should_save = True
 
-                def _save_face_async():
-                    try:
-                        save_face_image(
-                            face_crop_bgr=face_copy,
-                            label=save_label,
-                            confidence=conf,
-                            min_interval=MIN_SAVE_INTERVAL,
-                            source="stream",
-                            jpeg_quality=95,
-                            camera_name=camera_name_to_save,
-                            company_id=company_id_to_save
-                        )
-                    except Exception as e:
-                        print(f"Error saving face in async thread: {e}")
-                
-                # Spawn thread to save face without blocking frame processing
-                save_thread = threading.Thread(target=_save_face_async, daemon=True)
-                save_thread.start()
+        
+        if should_save:
+            # Make a safe copy for the thread
+            face_copy = face_crop_to_save.copy()
+            camera_name_to_save = stream_id or "default"
+            if stream_id:
+                try:
+                    from camera_management.streaming import get_stream_manager
+                    s_info = get_stream_manager().get_stream_info(stream_id)
+                    if s_info and 'camera_name' in s_info:
+                        camera_name_to_save = s_info['camera_name']
+                except Exception as e:
+                    print(f"Failed to lookup camera_name/company_id for {stream_id}: {e}")
+            
+            company_id_to_save = None
+            if stream_id:
+                try:
+                    from camera_management.streaming import get_stream_manager
+                    s_info = get_stream_manager().get_stream_info(stream_id)
+                    if s_info and 'company_id' in s_info:
+                        company_id_to_save = s_info['company_id']
+                except Exception as e:
+                    print(f"Failed to lookup company_id for {stream_id}: {e}")
+
+            def _save_face_async():
+                try:
+                    save_face_image(
+                        face_crop_bgr=face_copy,
+                        label=save_label,
+                        confidence=conf,
+                        min_interval=MIN_SAVE_INTERVAL,
+                        source="stream",
+                        jpeg_quality=95,
+                        camera_name=camera_name_to_save,
+                        company_id=company_id_to_save
+                    )
+                except Exception as e:
+                    print(f"Error saving face in async thread: {e}")
+            
+            # Spawn thread to save face without blocking frame processing
+            save_thread = threading.Thread(target=_save_face_async, daemon=True)
+            save_thread.start()
 
         detections.append({"name": name, "conf": conf, "bbox": (x1, y1, x2, y2)})
 
+    # DETECTION PERSISTENCE: Return all currently active tracks for UI rendering
+    if stream_id:
+        active_detections = []
+        with tracking_lock:
+            # We iterate over the tracking data for this stream
+            for tid, tinfo in person_tracking.get(stream_id, {}).items():
+                seen_delta = current_time - tinfo.get('last_seen', 0)
+                if seen_delta < MAX_TRACK_AGE_SECONDS:
+                    # Map track info to detection format for the UI
+                    active_detections.append({
+                        "name": tinfo.get('name', 'Unknown'),
+                        "conf": 0.95 if tinfo.get('name') != "Unknown" else 0.5,
+                        "bbox": tinfo.get('bbox'),
+                        "track_id": tid,
+                        "is_persisted": seen_delta > 0.1 # Mark as persisted if not from current frame (approx)
+                    })
+        return frame_bgr, active_detections
+
     return frame_bgr, detections
+
 
 
 def render_bounding_boxes(frame: np.ndarray, detections: List[Dict[str, Any]], show_bounding_box: bool = True) -> np.ndarray:

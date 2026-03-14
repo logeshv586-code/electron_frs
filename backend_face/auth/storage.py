@@ -41,7 +41,15 @@ def get_settings() -> Dict[str, Any]:
     return load_json(SETTINGS_FILE, {
         "max_cameras_per_admin": 10,
         "max_cameras_per_supervisor": 5,
-        "require_approval_for_new_users": False
+        "require_approval_for_new_users": False,
+        "attendance": {
+            "punch_in": "09:30",
+            "punch_out": "18:00",
+            "working_hours": 8,
+            "grace_minutes": 15,
+            "min_hours_present": 4.0,
+            "overtime_after": 9.0
+        }
     })
 
 def save_settings(settings: Dict[str, Any]):

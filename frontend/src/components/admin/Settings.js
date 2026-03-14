@@ -17,7 +17,15 @@ const Settings = () => {
     smtp_user: '',
     smtp_password: '',
     smtp_use_tls: true,
-    email_from: ''
+    email_from: '',
+    attendance: {
+      punch_in: '09:30',
+      punch_out: '18:00',
+      working_hours: 8,
+      grace_minutes: 15,
+      min_hours_present: 4.0,
+      overtime_after: 9.0
+    }
   });
 
   useEffect(() => {
@@ -36,7 +44,15 @@ const Settings = () => {
       });
       if (response.ok) {
         const data = await response.json();
-        setSettings(prev => ({ ...prev, ...data.settings }));
+        const incomingSettings = data.settings || {};
+        setSettings(prev => ({
+          ...prev,
+          ...incomingSettings,
+          attendance: {
+            ...prev.attendance,
+            ...(incomingSettings.attendance || {})
+          }
+        }));
       }
     } catch (err) {
       console.error('Failed to fetch settings:', err);
@@ -47,10 +63,22 @@ const Settings = () => {
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setSettings(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : (type === 'number' ? parseInt(value) || 0 : value)
-    }));
+
+    if (name.startsWith('attendance.')) {
+      const field = name.split('.')[1];
+      setSettings(prev => ({
+        ...prev,
+        attendance: {
+          ...prev.attendance,
+          [field]: type === 'number' ? parseFloat(value) || 0 : value
+        }
+      }));
+    } else {
+      setSettings(prev => ({
+        ...prev,
+        [name]: type === 'checkbox' ? checked : (type === 'number' ? parseInt(value) || 0 : value)
+      }));
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -195,6 +223,80 @@ const Settings = () => {
                     />
                     Use TLS/SSL
                   </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <div className="section-title">
+                <Server size={18} />
+                <h3>Attendance Configuration</h3>
+              </div>
+              <p className="section-desc">Set global thresholds for punch-in, punch-out, and daily targets.</p>
+              <div className="settings-grid">
+                <div className="form-group">
+                  <label>Punch In Time (Late Threshold)</label>
+                  <input
+                    type="time"
+                    name="attendance.punch_in"
+                    value={settings.attendance?.punch_in || '09:30'}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Punch Out Time</label>
+                  <input
+                    type="time"
+                    name="attendance.punch_out"
+                    value={settings.attendance?.punch_out || '18:00'}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Target Working Hours</label>
+                  <input
+                    type="number"
+                    name="attendance.working_hours"
+                    value={settings.attendance?.working_hours || 8}
+                    onChange={handleInputChange}
+                    min="1"
+                    max="24"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Grace Period (Minutes)</label>
+                  <input
+                    type="number"
+                    name="attendance.grace_minutes"
+                    value={settings.attendance?.grace_minutes || 0}
+                    onChange={handleInputChange}
+                    min="0"
+                    max="120"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Min Hours Present (Threshold)</label>
+                  <input
+                    type="number"
+                    name="attendance.min_hours_present"
+                    value={settings.attendance?.min_hours_present || 0}
+                    onChange={handleInputChange}
+                    min="0"
+                    max="24"
+                    step="0.5"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Overtime After (Hours)</label>
+                  <input
+                    type="number"
+                    name="attendance.overtime_after"
+                    value={settings.attendance?.overtime_after || 0}
+                    onChange={handleInputChange}
+                    min="1"
+                    max="24"
+                    step="0.5"
+                  />
                 </div>
               </div>
             </div>

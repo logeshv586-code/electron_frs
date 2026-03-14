@@ -3,14 +3,15 @@ from pydantic import BaseModel
 import os
 import shutil
 import re
+import json 
 from typing import List, Optional, Dict
 from datetime import datetime
 import logging
 import face_recognition
 import cv2
 import numpy as np
-import json
 from .config import KNOWN_FACES_DIR, UNKNOWN_FACES_DIR
+from auth.storage import get_settings
 from xhtml2pdf import pisa
 from io import BytesIO
 from fastapi.responses import Response, StreamingResponse
@@ -257,7 +258,11 @@ async def filter_faces_logic(
     face_type: Optional[str] = None
 ):
     current_user = request.scope.get("user", {}) if request else {}
-    company_id = current_user.get("company_id", "default")
+    # SuperAdmin gets None so process_directory scans ALL companies.
+    # Regular users without a company_id fall back to "default".
+    company_id = current_user.get("company_id")
+    if company_id is None and current_user.get("role") != "SuperAdmin":
+        company_id = "default"
     
     name_filter = name.lower().strip() if name and isinstance(name, str) else None
     from_date_obj = None
@@ -344,60 +349,77 @@ async def filter_faces_logic(
     def process_directory(base_dir: str, directory_type: str):
         if face_type_filter and face_type_filter != directory_type:
             return []
-            
-        # Multi-tenancy: Only search in the company's sub-directory
-        tenant_dir = os.path.join(base_dir, company_id)
-        if not os.path.exists(tenant_dir):
-            # Fallback for "default" or if company dir doesn't exist yet but root does
-            if company_id == "default":
-                tenant_dir = base_dir
-            else:
+
+        # ── Determine which directories to scan ──────────────────
+        if company_id is None:
+            # SuperAdmin: scan every company subdirectory
+            if not os.path.exists(base_dir):
                 return []
-                
-        if not os.path.exists(tenant_dir):
-            return []
-            
-        faces = []
-        for root_dir, _, files in os.walk(tenant_dir):
-            for face_file in files:
-                if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                    continue
-                img_path = os.path.join(root_dir, face_file)
-                if not os.path.isfile(img_path):
-                    continue
-
-                timestamp = extract_timestamp(face_file, img_path)
-                timestamp_date = timestamp.date()
-                if from_date_obj and timestamp_date < from_date_obj:
-                    continue
-                if to_date_obj and timestamp_date > to_date_obj:
-                    continue
-
-                relative_path = os.path.relpath(img_path, base_dir)
-                parts = relative_path.split(os.sep)
-
-                if directory_type == "known":
-                    person_name, camera_name = resolve_known_metadata(parts, face_file)
-                    if name_filter and name_filter not in person_name.lower():
-                        continue
+            dirs_to_scan = [
+                entry.path
+                for entry in os.scandir(base_dir)
+                if entry.is_dir()
+            ]
+            if not dirs_to_scan:
+                return []
+        else:
+            # Regular tenant: scope to their directory only
+            tenant_dir = os.path.join(base_dir, company_id)
+            if not os.path.exists(tenant_dir):
+                # Legacy fallback for "default" company
+                if company_id == "default":
+                    tenant_dir = base_dir
                 else:
-                    camera_name = resolve_unknown_metadata(parts)
-                    person_name = "Unknown"
-                    if name_filter and name_filter not in "unknown":
+                    return []
+            if not os.path.exists(tenant_dir):
+                return []
+            dirs_to_scan = [tenant_dir]
+
+        # ── Walk each directory ───────────────────────────────────
+        faces = []
+        for scan_dir in dirs_to_scan:
+            for root_dir, _, files in os.walk(scan_dir):
+                for face_file in files:
+                    if not face_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                        continue
+                    img_path = os.path.join(root_dir, face_file)
+                    if not os.path.isfile(img_path):
                         continue
 
-                mapped_camera_name = get_camera_display_name(camera_name)
+                    timestamp = extract_timestamp(face_file, img_path)
+                    timestamp_date = timestamp.date()
+                    if from_date_obj and timestamp_date < from_date_obj:
+                        continue
+                    if to_date_obj and timestamp_date > to_date_obj:
+                        continue
 
-                if camera and camera != "all_cameras" and mapped_camera_name != camera:
-                    continue
+                    # Path relative to scan_dir (not base_dir) so
+                    # resolve_*_metadata always gets [camera, person, file]
+                    relative_path = os.path.relpath(img_path, scan_dir)
+                    parts = relative_path.split(os.sep)
 
-                faces.append({
-                    "name": person_name,
-                    "image_path": convert_file_path_to_url(img_path),
-                    "timestamp": timestamp.isoformat(),
-                    "type": directory_type,
-                    "camera": mapped_camera_name
-                })
+                    if directory_type == "known":
+                        person_name, camera_name = resolve_known_metadata(parts, face_file)
+                        if name_filter and name_filter not in person_name.lower():
+                            continue
+                    else:
+                        camera_name = resolve_unknown_metadata(parts)
+                        person_name = "Unknown"
+                        if name_filter and name_filter not in "unknown":
+                            continue
+
+                    mapped_camera_name = get_camera_display_name(camera_name)
+
+                    if camera and camera != "all_cameras" and mapped_camera_name != camera:
+                        continue
+
+                    faces.append({
+                        "name": person_name,
+                        "image_path": convert_file_path_to_url(img_path),
+                        "timestamp": timestamp.isoformat(),
+                        "type": directory_type,
+                        "camera": mapped_camera_name
+                    })
         return faces
 
     matching_faces = []
@@ -665,8 +687,12 @@ async def get_attendance_logic(
         except Exception:
             return datetime.utcnow()
 
-    LATE_THRESHOLD_HOUR = 9
-    LATE_THRESHOLD_MINUTE = 30
+    settings = get_settings().get("attendance", {})
+    punch_in_limit = settings.get("punch_in", "09:30")
+    LATE_THRESHOLD_HOUR, LATE_THRESHOLD_MINUTE = map(int, punch_in_limit.split(":"))
+    TARGET_WORKING_HOURS = settings.get("working_hours", 8)
+    GRACE_MINUTES = settings.get("grace_minutes", 15)
+    MIN_HOURS_PRESENT = settings.get("min_hours_present", 4.0)
 
     # Scan KNOWN_FACES_DIR
     current_user = request.scope.get("user", {})
@@ -686,7 +712,7 @@ async def get_attendance_logic(
                 if ts.date() != target_date_obj:
                     continue
                 
-                relative_path = os.path.relpath(img_path, KNOWN_FACES_DIR)
+                relative_path = os.path.relpath(img_path, known_search_base)
                 parts = relative_path.split(os.sep)
                 
                 if len(parts) >= 2:
@@ -716,9 +742,19 @@ async def get_attendance_logic(
             minutes = int((total_seconds % 3600) // 60)
             record["working_hours"] = f"{hours}h {minutes}m"
             
-            # Check if late
-            if punch_in_dt.hour > LATE_THRESHOLD_HOUR or (punch_in_dt.hour == LATE_THRESHOLD_HOUR and punch_in_dt.minute > LATE_THRESHOLD_MINUTE):
+            # Check if late (using grace period)
+            threshold_dt = punch_in_dt.replace(hour=LATE_THRESHOLD_HOUR, minute=LATE_THRESHOLD_MINUTE, second=0, microsecond=0)
+            from datetime import timedelta
+            if punch_in_dt > (threshold_dt + timedelta(minutes=GRACE_MINUTES)):
                 record["is_late"] = True
+                record["status"] = "Late"
+            
+            # Optional: Mark as absent if worked hours < MIN_HOURS_PRESENT
+            if total_seconds / 3600 < MIN_HOURS_PRESENT:
+                # We can keep 'Present' or 'Late' but maybe add a warning or change status?
+                # For now, let's keep the existing status but maybe record['status'] = "Short Attendance" if preferred.
+                # The user didn't specify exactly, so let's stick to the late fix.
+                pass
         
         del record["events"]
         record["s_no"] = s_no
@@ -906,7 +942,8 @@ async def get_dashboard_stats_logic(
         attendance_data = await get_attendance_logic(request, target_date)
         records = attendance_data.get("attendance", [])
         
-        present = sum(1 for r in records if r["status"] == "Present")
+        # CORRECT — count both Present and Late as "attended"
+        present = sum(1 for r in records if r["status"] in ["Present", "Late"])
         absent = total_employees - present
         late = sum(1 for r in records if r.get("is_late", False))
         

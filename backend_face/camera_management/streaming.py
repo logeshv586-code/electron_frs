@@ -324,45 +324,28 @@ class CameraStreamManager:
                     last_processed_frame_num = frame_num
                     frame_counter += 1
                     
-                    # Skip processing for some frames to maintain frame rate
+                    # Skip processing for some frames to maintain frame rate.
+                    # Pass raw frame only – re-rendering stale tracking data
+                    # causes ghost bounding boxes and wastes CPU every other frame.
                     if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
-                        # Use raw frame and draw last known bounding boxes on skipped frames
-                        skipped_frame = frame.copy()
-                        if self.show_bounding_box:
-                            try:
-                                # Re-use last detections from tracking
-                                last_dets = []
-                                import face_pipeline
-                                with face_pipeline.tracking_lock:
-                                    if stream_id in face_pipeline.person_tracking:
-                                        for track_id, info in face_pipeline.person_tracking[stream_id].items():
-                                            if info.get('bbox'):
-                                                last_dets.append({
-                                                    'name': info.get('name', 'Unknown'),
-                                                    'conf': 0.0,
-                                                    'bbox': info['bbox']
-                                                })
-                                if last_dets:
-                                    skipped_frame = face_pipeline.render_bounding_boxes(skipped_frame, last_dets, show_bounding_box=True)
-                            except Exception as e:
-                                pass
-                        self.processed_frames_latest[stream_id] = skipped_frame
+                        self.processed_frames_latest[stream_id] = frame.copy()
                     else:
                         # Process frame for face detection
                         try:
                             from face_pipeline import process_frame as face_process_frame
                             from face_pipeline import render_bounding_boxes
                             processed_frame, detections = face_process_frame(frame, force_process=True, stream_id=stream_id)
-                            # Only render bounding boxes from THIS frame's fresh detections
-                            if self.show_bounding_box:
-                                if detections:
-                                    processed_frame = render_bounding_boxes(processed_frame, detections, show_bounding_box=True)
-                                else:
-                                    pass # No faces found
-                            self.processed_frames_latest[stream_id] = processed_frame
-                        except Exception as face_error:
-                            logger.debug(f"Face processing error for stream {stream_id}: {face_error}")
-                            self.processed_frames_latest[stream_id] = frame.copy()
+                            # Only render when faces were actually detected in THIS frame.
+                            if self.show_bounding_box and detections:
+                                logger.info(f"[BBOX-STRE] show={self.show_bounding_box}, detections={len(detections)}")
+                                processed_frame = render_bounding_boxes(
+                                    processed_frame, detections, show_bounding_box=True
+                                )
+                        except Exception as e:
+                            logger.error(f"Error in face processing: {e}")
+                            processed_frame = frame
+                        
+                        self.processed_frames_latest[stream_id] = processed_frame.copy()
                             
                 except Exception as e:
                     logger.error(f"Error in face processing worker for {stream_id}: {e}")
@@ -382,7 +365,7 @@ class CameraStreamManager:
         max_reconnect_attempts = 5
 
         # JPEG encoding parameters - Optimized for smooth streaming
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 80]
         
         # Initialize processing thread for this stream
         if stream_id not in self.processing_threads:
@@ -502,6 +485,15 @@ class CameraStreamManager:
                         # Fallback to raw frame if processing hasn't started yet
                         if processed_frame is None or processed_frame.shape[0] < 10:
                             processed_frame = frame
+
+                        # Check if processing thread is still alive
+                        if stream_id in self.processing_threads:
+                            t = self.processing_threads[stream_id]
+                            if not t.is_alive():
+                                logger.error(f"Processing thread dead for {stream_id}, restarting")
+                                new_t = threading.Thread(target=self._face_processing_worker, args=(stream_id,), daemon=True)
+                                new_t.start()
+                                self.processing_threads[stream_id] = new_t
 
                         # Encode and send frame immediately (don't wait for processing)
                         try:

@@ -184,6 +184,8 @@ def init(data_dir: str, ctx: int = -1, det_size: Tuple[int, int] = (640, 640), u
     known_encodings, known_names = load_known_faces(data_dir)
     
     with embedding_lock:
+        # WARNING: _global embeddings contain all companies' faces.
+        # Only used when company_id cannot be determined (SuperAdmin/legacy streams).
         company_embeddings["_global"] = {
             "encodings": known_encodings,
             "names": known_names,
@@ -398,13 +400,14 @@ def _cleanup_old_tracks(stream_id: str, current_frame_count: int, current_time: 
         del tracks[track_id]
 
 
-def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id: Optional[str] = None) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id: Optional[str] = None, company_id: Optional[str] = None) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """Detect + recognize faces in one frame. Returns annotated frame + detections.
     
     Args:
         frame_bgr: Input BGR frame
         force_process: Deprecated - all frames are now processed (kept for backward compatibility)
         stream_id: Optional stream ID for frame buffer access and GPU assignment
+        company_id: Optional company ID to scope face recognition
     """
     global person_tracking, track_id_counter
     
@@ -424,9 +427,8 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
         if stream_id not in track_id_counter:
             track_id_counter[stream_id] = 0
             
-    # Get company_id for this stream
-    company_id = None
-    if stream_id:
+    # Resolve company_id if not explicitly provided
+    if company_id is None and stream_id:
         try:
             from camera_management.streaming import get_stream_manager
             s_info = get_stream_manager().get_stream_info(stream_id)

@@ -255,13 +255,18 @@ def is_face_already_registered(image_input, company_id: Optional[str] = None) ->
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error checking face: {str(e)}")
 
-def get_unique_name(name: str) -> str:
-    """Get a unique name for the person"""
+def get_unique_name(name: str, company_id: Optional[str] = None) -> str:
+    """Get a unique name for the person, scoped by company"""
     try:
         with open(METADATA_FILE, 'r') as f:
             person_data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         person_data = {}
+
+    # Filter to only this company's entries if company_id is provided
+    if company_id:
+        person_data = {k: v for k, v in person_data.items() 
+                       if v.get("company_id") == company_id}
 
     suffix = 1
     unique_name = name
@@ -554,7 +559,7 @@ class FaceProcessor:
             return []
 
     @staticmethod
-    def process_bulk_registration(excel_path, root_data_dir, output_base_dir):
+    def process_bulk_registration(excel_path, root_data_dir, output_base_dir, company_id: Optional[str] = None):
         """Process bulk registration using Excel data and folder structure."""
         VALID_CATEGORIES = [
             'criminal', 'offender', 'chainsnatching',
@@ -635,7 +640,7 @@ class FaceProcessor:
                     first_image_path = os.path.join(person_folder, image_files[0])
                     first_image = face_recognition.load_image_file(first_image_path)
                     
-                    if is_face_already_registered(first_image):
+                    if is_face_already_registered(first_image, company_id=company_id):
                         registration_results[person_name] = {'status': 'failed', 'reason': 'duplicate face'}
                         continue
 
@@ -665,7 +670,10 @@ class FaceProcessor:
                         all_augmented_images.extend(person_augmented)
 
                         # Create gallery directory and copy first image
-                        gallery_dir = os.path.join(GALLERY_DIR, safe_name)
+                        if company_id:
+                            gallery_dir = os.path.join(GALLERY_DIR, company_id, safe_name)
+                        else:
+                            gallery_dir = os.path.join(GALLERY_DIR, safe_name)
                         os.makedirs(gallery_dir, exist_ok=True)
                         shutil.copy2(
                             os.path.join(output_dir, "1.jpg"),
@@ -760,8 +768,8 @@ async def register_single(
         company_id = current_user.get("company_id")
 
         # Get unique name and create directories
-        unique_name = get_unique_name(name.lower())
-        person_dir = os.path.join(DATA_DIR, unique_name)
+        unique_name = get_unique_name(name.lower(), company_id=company_id)
+        person_dir = os.path.join(DATA_DIR, company_id or "default", unique_name)
         
         # Multi-tenant gallery structure
         if company_id:
@@ -924,10 +932,13 @@ async def register_bulk(
                 f.write(file_content)
 
         # Process bulk registration using the uploaded data directory
+        company_output_dir = os.path.join(DATA_DIR, company_id or "default")
+        os.makedirs(company_output_dir, exist_ok=True)
         results, augmented_images = FaceProcessor.process_bulk_registration(
             excel_path=excel_path,
             root_data_dir=temp_data_dir,
-            output_base_dir=DATA_DIR
+            output_base_dir=company_output_dir,
+            company_id=company_id
         )
 
         # Update metadata for successful registrations
@@ -991,8 +1002,8 @@ async def register_bulk(
                     'gender': final_gender,
                     'category': result['details']['category'],
                     'registration_date': datetime.now().isoformat(),
-                    'gallery_path': os.path.relpath(os.path.join(GALLERY_DIR, safe_name), BASE_DIR).replace('\\', '/'),
-                    'photo_path': os.path.relpath(os.path.join(GALLERY_DIR, safe_name, "1.jpg"), BASE_DIR).replace('\\', '/'),
+                    'gallery_path': os.path.relpath(gallery_person_dir, BASE_DIR).replace('\\', '/'),
+                    'photo_path': os.path.relpath(os.path.join(gallery_person_dir, "1.jpg"), BASE_DIR).replace('\\', '/'),
                     'age_range': age_range,
                     'age_source': age_source,
                     'predicted_age': predicted_age if isinstance(predicted_age, int) else None,
@@ -1011,14 +1022,14 @@ async def register_bulk(
                 
                 # Copy the first augmented image as original.jpg in gallery
                 if augmented_images:
-                    first_image = os.path.join(DATA_DIR, safe_name, "1.jpg")
+                    first_image = os.path.join(DATA_DIR, company_id or "default", safe_name, "1.jpg")
                     if os.path.exists(first_image):
                         shutil.copy2(first_image, os.path.join(gallery_person_dir, "1.jpg"))
 
                 response_list.append(RegistrationResponse(
                     status='success',
                     message=f"Successfully registered {person_name}",
-                    person_dir=os.path.join(DATA_DIR, safe_name),
+                    person_dir=os.path.join(DATA_DIR, company_id or "default", safe_name),
                     age_range=age_range,
                     age_source=age_source
                 ))

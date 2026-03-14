@@ -193,9 +193,9 @@ mount_services()
 # Initialize face pipeline (non-disruptive; skips if unavailable)
 # Try GPU first (ctx=0), will auto-fallback to CPU if GPU unavailable
 try:
-    # Optimized for Tesla T4 GPU: Higher detection size for better accuracy
-    # (1024, 1024) provides excellent quality while Tesla T4 can handle it efficiently
-    init_face_pipeline(os.path.join(os.path.dirname(__file__), "data"), ctx=0, det_size=(1024, 1024))
+    # Optimized for Tesla T4 GPU: Balance of speed and accuracy
+    # (640, 640) significantly reduces compute load while maintaining detection quality
+    init_face_pipeline(os.path.join(os.path.dirname(__file__), "data"), ctx=0, det_size=(640, 640))
     FACE_PIPELINE_READY = True
     logger.info("? Face pipeline initialized")
 except Exception as e:
@@ -997,8 +997,8 @@ class SimpleRTSPStream:
         with self.lock:
             if self.last_frame is not None:
                 try:
-                    # Optimized for Tesla T4: Encode frame as JPEG with maximum quality
-                    _, buffer = cv2.imencode('.jpg', self.last_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    # Balanced JPEG quality for smooth streaming
+                    _, buffer = cv2.imencode('.jpg', self.last_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     return buffer.tobytes()
                 except Exception as e:
                     logger.error(f"Error encoding frame: {e}")
@@ -1027,15 +1027,22 @@ def generate_mjpeg_stream(stream_id: str):
 
             if frame is not None:
                 try:
-                    processed_frame, detections = process_frame(frame)
-                    # Conditionally render bounding boxes
+                    stream_company_id = active_streams.get(stream_id, {}).get('company_id')
+                    processed_frame, detections = process_frame(
+                        frame, stream_id=stream_id, company_id=stream_company_id
+                    )
+                    # Only render when faces were actually detected in THIS frame.
+                    # An empty list or None means no faces – skip entirely.
                     if show_bounding_box and detections:
-                        processed_frame = render_bounding_boxes(processed_frame, detections, show_bounding_box=True)
+                        logger.info(f"[BBOX-MAIN] show={show_bounding_box}, detections={len(detections)}")
+                        processed_frame = render_bounding_boxes(
+                            processed_frame, detections, show_bounding_box=True
+                        )
                 except Exception as e:
-                    logger.debug(f"Face pipeline processing error for {stream_id}: {e}")
-                    processed_frame = frame
+                    logger.warning(f"Face pipeline processing error for {stream_id}: {e}")
+                    processed_frame = frame  # fall back to raw frame
                 try:
-                    _, buffer = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    _, buffer = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
                 except Exception as e:
@@ -1150,6 +1157,7 @@ async def start_stream(request: Request):
         active_streams[stream_id] = {
             'stream': stream,
             'rtsp_url': rtsp_url,
+            'company_id': body.get("company_id"),
             'created_at': time.time()
         }
 

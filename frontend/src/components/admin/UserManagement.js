@@ -20,7 +20,9 @@ const UserManagement = () => {
     assigned_menus: [],
     license_duration: '1y', // '1y' | '2y' | 'custom'
     license_start_date: '',
-    license_end_date: ''
+    license_end_date: '',
+    company_name: '',
+    company_id: ''
   });
 
   const availableMenus = [
@@ -32,6 +34,7 @@ const UserManagement = () => {
     { id: 'camera', label: 'Camera Management' },
     { id: 'stream-viewer', label: 'Stream Viewer' },
     { id: 'users', label: 'User Management' },
+    { id: 'settings', label: 'Settings' },
   ];
 
   const { user: currentUser, token } = useAuthStore();
@@ -139,7 +142,11 @@ const UserManagement = () => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify({
+          ...body,
+          company_name: formData.role === 'Admin' ? formData.company_name : undefined,
+          company_id: formData.role === 'Admin' ? formData.company_id : undefined
+        })
       });
 
       if (!response.ok) {
@@ -385,7 +392,12 @@ const UserManagement = () => {
                     <div className="form-row">
                       <div className="form-group">
                         <label>ROLE</label>
-                        <select name="role" value={formData.role} onChange={handleInputChange} disabled={isEditing}>
+                        <select name="role" value={formData.role} onChange={(e) => {
+                          handleInputChange(e);
+                          if (e.target.value !== 'Admin') {
+                            setFormData(prev => ({ ...prev, company_name: '', company_id: '' }));
+                          }
+                        }} disabled={isEditing}>
                           {currentUser.role === 'SuperAdmin' && <option value="Admin">Admin</option>}
                           <option value="Supervisor">Supervisor</option>
                         </select>
@@ -401,6 +413,37 @@ const UserManagement = () => {
                         />
                       </div>
                     </div>
+
+                    {(currentUser.role === 'SuperAdmin' && formData.role === 'Admin' && !isEditing) && (
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>COMPANY NAME</label>
+                          <input
+                            type="text"
+                            name="company_name"
+                            value={formData.company_name}
+                            onChange={(e) => {
+                              const name = e.target.value;
+                              const slug = name.toLowerCase().replace(/ /g, '-').replace(/[^\w-]/g, '');
+                              setFormData(prev => ({ ...prev, company_name: name, company_id: slug }));
+                            }}
+                            required
+                            placeholder="e.g. Acme Corp"
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>COMPANY ID (SLUG)</label>
+                          <input
+                            type="text"
+                            name="company_id"
+                            value={formData.company_id}
+                            onChange={handleInputChange}
+                            required
+                            placeholder="e.g. acme-corp"
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     {(currentUser.role === 'SuperAdmin' && formData.role === 'Admin') && (
                       <>

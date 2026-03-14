@@ -24,6 +24,7 @@ class CreateUserRequest(BaseModel):
     license_start_date: Optional[str] = None
     license_end_date: Optional[str] = None
     company_id: Optional[str] = None
+    company_name: Optional[str] = None
 
 
 class UpdateUserRequest(BaseModel):
@@ -145,6 +146,13 @@ class SettingsRequest(BaseModel):
     email_from: Optional[str] = None
 
     attendance: Optional[AttendanceSettings] = None
+    
+    # Face Recognition Toggle Settings
+    face_recognition_enabled: Optional[bool] = None
+    show_bounding_boxes: Optional[bool] = None
+    unknown_detection_enabled: Optional[bool] = None
+    long_distance_detection_enabled: Optional[bool] = None
+    min_face_size: Optional[int] = None
 
     @field_validator("max_cameras_per_admin", "max_cameras_per_supervisor", mode="before")
     @classmethod
@@ -175,6 +183,18 @@ async def create_user_endpoint(request: CreateUserRequest, request_obj: Request)
     if current_user["role"] == "Admin" and request.role not in ["Supervisor"]:
         raise HTTPException(status_code=403, detail="Admins can only create Supervisors")
 
+    # Handle integrated company creation for Admins
+    actual_company_id = request.company_id or current_user.get("company_id")
+    
+    if current_user["role"] == "SuperAdmin" and request.role == "Admin" and request.company_name:
+        try:
+            from .companies import create_company
+            # Create company first
+            company = create_company(name=request.company_name, company_id=request.company_id)
+            actual_company_id = company["id"]
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Company creation failed: {str(e)}")
+
     try:
         user = create_user(
             username=request.username,
@@ -187,7 +207,7 @@ async def create_user_endpoint(request: CreateUserRequest, request_obj: Request)
             license_start_date=request.license_start_date,
             license_end_date=request.license_end_date,
             email=request.email,
-            company_id=request.company_id or current_user.get("company_id"),
+            company_id=actual_company_id,
         )
         return {"message": "User created successfully", "user": user}
     except ValueError as e:
@@ -308,45 +328,45 @@ async def get_user_cameras_endpoint(username: str, request: Request):
 
     if current_user["username"] != username and current_user["role"] not in ["SuperAdmin", "Admin"]:
         raise HTTPException(status_code=403, detail="Cannot view other users' cameras")
-
     cameras = get_user_cameras(username)
     return {"cameras": cameras}
 
 
 @router.get("/settings/system")
-async def get_system_settings(request: Request):
+async def get_system_settings_endpoint(request: Request, cid: Optional[str] = None):
     current_user = request.scope.get("user")
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    if current_user["role"] != "SuperAdmin":
-        raise HTTPException(status_code=403, detail="Only SuperAdmin can view system settings")
-
-    settings = get_settings()
-    return {"settings": settings}
+    if not current_user or current_user["role"] not in ["SuperAdmin", "Admin"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
+    # Use provided cid if SuperAdmin, otherwise use user's company_id
+    effective_company_id = cid if current_user["role"] == "SuperAdmin" else current_user.get("company_id")
+    return {"settings": get_settings(effective_company_id)}
 
 
 @router.put("/settings/system")
-async def update_system_settings(request: SettingsRequest, request_obj: Request):
+async def update_system_settings_endpoint(request: SettingsRequest, request_obj: Request, cid: Optional[str] = None):
     current_user = request_obj.scope.get("user")
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    if current_user["role"] != "SuperAdmin":
-        raise HTTPException(status_code=403, detail="Only SuperAdmin can update system settings")
-
-    settings = get_settings()
-    # model_dump() is the Pydantic V2 replacement for .dict()
+    if not current_user or current_user["role"] not in ["SuperAdmin", "Admin"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
+    effective_company_id = cid if current_user["role"] == "SuperAdmin" else current_user.get("company_id")
+    settings = get_settings(effective_company_id)
     updates = request.model_dump(exclude_unset=True)
+    
+    # Non-SuperAdmins can only update attendance and face recognition settings
+    if current_user["role"] != "SuperAdmin":
+        allowed_keys = ["attendance", "face_recognition_enabled", "show_bounding_boxes", "unknown_detection_enabled", "long_distance_detection_enabled", "min_face_size"]
+        updates = {k: v for k, v in updates.items() if k in allowed_keys}
 
-    # Deep-merge attendance so a partial update doesn't erase existing keys
-    if "attendance" in updates and updates["attendance"] is not None:
-        existing_attendance = settings.get("attendance", {})
-        new_attendance = {k: v for k, v in updates["attendance"].items() if v is not None}
-        existing_attendance.update(new_attendance)
-        updates["attendance"] = existing_attendance
+    # Deep merge attendance if present
+    if "attendance" in updates and updates["attendance"]:
+        current_attendance = settings.get("attendance", {})
+        for k, v in updates["attendance"].items():
+            if v is not None:
+                current_attendance[k] = v
+        settings["attendance"] = current_attendance
+        del updates["attendance"]
 
     settings.update(updates)
-    save_settings(settings)
-
+    save_settings(settings, effective_company_id)
     return {"message": "Settings updated successfully", "settings": settings}

@@ -5,5 +5,18 @@
   "admin_can_set_supervisor_camera_limit": true,
   "admin_can_configure_supervisor_menus": true,
   "exclusive_camera_assignment": true,
-  "jwt_exp_minutes": 60
+  "jwt_exp_minutes": 60,
+  "face_recognition_enabled": true,
+  "show_bounding_boxes": true,
+  "unknown_detection_enabled": true,
+  "long_distance_detection_enabled": false,
+  "min_face_size": 40,
+  "attendance": {
+    "punch_in": "09:30",
+    "punch_out": "18:00",
+    "working_hours": 8,
+    "grace_minutes": 15,
+    "min_hours_present": 4.0,
+    "overtime_after": 10.0
+  }
 }

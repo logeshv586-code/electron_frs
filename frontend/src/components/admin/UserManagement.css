@@ -232,9 +232,9 @@
 .wide-modal {
   width: 88vw;
   max-width: 960px;
-  background: #111424;
+  background: var(--bg-panel);
   border-radius: 10px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-color);
   z-index: 1001;
   display: flex;
   flex-direction: column;
@@ -247,9 +247,9 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #111424;
+  background: var(--bg-panel);
   flex-shrink: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .modal-header h3 {
@@ -392,10 +392,10 @@
 .form-group input,
 .form-group select,
 .disabled-input {
-  background: #1a1d2d;
-  border: 1px solid #2a2f42;
+  background: var(--bg-app);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
-  color: #fff;
+  color: var(--text-primary);
   padding: 7px 10px;
   height: 34px;
   font-size: 0.82rem;
@@ -427,8 +427,8 @@
 }
 
 .permission-card {
-  background: #161929;
-  border: 1px solid #232840;
+  background: var(--bg-app);
+  border: 1px solid var(--border-color);
   border-radius: 5px;
   padding: 7px 10px;
   display: flex;

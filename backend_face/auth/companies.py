@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import uuid
+from datetime import datetime
 from .storage import load_json, atomic_write_json
 
 COMPANIES_FILE = Path("data/auth/companies.json")
@@ -19,18 +20,22 @@ def get_companies() -> Dict[str, Any]:
 def save_companies(companies: Dict[str, Any]):
     atomic_write_json(COMPANIES_FILE, companies)
 
-def create_company(name: str, address: str = "") -> Dict[str, Any]:
+def create_company(name: str, company_id: Optional[str] = None) -> Dict[str, Any]:
     companies = get_companies()
-    company_id = str(uuid.uuid4())
+    
+    # If no ID provided, we could still generate one, but plan says slug is provided
+    # or auto-generated in frontend. Let's ensure it's unique.
+    cid = company_id if company_id else str(uuid.uuid4())
+    
+    if cid in companies:
+        raise ValueError(f"Company ID {cid} already exists")
     
     company_data = {
-        "id": company_id,
+        "id": cid,
         "name": name,
-        "address": address,
-        "created_at": os.getenv("CURRENT_TIME", "2024-01-01T00:00:00Z") # Use consistent timestamp
+        "created_at": datetime.now().isoformat()
     }
-    
-    companies[company_id] = company_data
+    companies[cid] = company_data
     save_companies(companies)
     return company_data
 

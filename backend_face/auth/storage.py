@@ -37,11 +37,16 @@ def get_users() -> Dict[str, Any]:
 def save_users(users: Dict[str, Any]):
     atomic_write_json(USERS_FILE, users)
 
-def get_settings() -> Dict[str, Any]:
-    return load_json(SETTINGS_FILE, {
+def get_settings(company_id: Optional[str] = None) -> Dict[str, Any]:
+    default_settings = {
         "max_cameras_per_admin": 10,
         "max_cameras_per_supervisor": 5,
         "require_approval_for_new_users": False,
+        "face_recognition_enabled": True,
+        "show_bounding_boxes": True,
+        "unknown_detection_enabled": True,
+        "long_distance_detection_enabled": False,
+        "min_face_size": 40,
         "attendance": {
             "punch_in": "09:30",
             "punch_out": "18:00",
@@ -50,10 +55,33 @@ def get_settings() -> Dict[str, Any]:
             "min_hours_present": 4.0,
             "overtime_after": 9.0
         }
-    })
+    }
+    
+    # Load global settings as base
+    global_settings = load_json(SETTINGS_FILE, default_settings)
+    
+    if not company_id:
+        return global_settings
+        
+    # Load company-specific settings if they exist
+    company_settings_file = AUTH_DATA_DIR / f"settings_{company_id}.json"
+    if company_settings_file.exists():
+        company_settings = load_json(company_settings_file, {})
+        # Merge global settings with company-specific overrides
+        # We want attendance to be specifically merged
+        merged = {**global_settings, **company_settings}
+        if "attendance" in company_settings:
+            merged["attendance"] = {**global_settings.get("attendance", {}), **company_settings["attendance"]}
+        return merged
+        
+    return global_settings
 
-def save_settings(settings: Dict[str, Any]):
-    atomic_write_json(SETTINGS_FILE, settings)
+def save_settings(settings: Dict[str, Any], company_id: Optional[str] = None):
+    if company_id:
+        company_settings_file = AUTH_DATA_DIR / f"settings_{company_id}.json"
+        atomic_write_json(company_settings_file, settings)
+    else:
+        atomic_write_json(SETTINGS_FILE, settings)
 
 def get_cameras() -> Dict[str, Any]:
     return load_json(CAMERAS_FILE, {})

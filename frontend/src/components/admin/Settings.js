@@ -1,13 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import useAuthStore from '../../store/authStore';
-import { Settings as SettingsIcon, Save, Mail, Server, Shield } from 'lucide-react';
+import { 
+  Settings as SettingsIcon, 
+  Save, 
+  ShieldCheck, 
+  Mail, 
+  ShieldAlert,
+  Server,
+  Zap,
+  Target,
+  Maximize,
+  Shield
+} from 'lucide-react';
 import { API_BASE_URL } from '../../utils/apiConfig';
 import './Settings.css';
 
 const Settings = () => {
-  const { token, user } = useAuthStore();
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState({ type: '', text: '' });
+  const { user } = useAuthStore(); // Removed 'token' from here as it's now fetched from localStorage
   const [settings, setSettings] = useState({
     max_cameras_per_admin: 10,
     max_cameras_per_supervisor: 5,
@@ -18,6 +27,11 @@ const Settings = () => {
     smtp_password: '',
     smtp_use_tls: true,
     email_from: '',
+    face_recognition_enabled: true,
+    show_bounding_boxes: true,
+    unknown_detection_enabled: true,
+    long_distance_detection_enabled: false,
+    min_face_size: 40,
     attendance: {
       punch_in: '09:30',
       punch_out: '18:00',
@@ -28,23 +42,42 @@ const Settings = () => {
     }
   });
 
-  useEffect(() => {
-    if (user?.role === 'SuperAdmin') {
-      fetchSettings();
-    }
-  }, [user]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState(null); // Changed initial state to null
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState('');
 
-  const fetchSettings = async () => {
+  const fetchCompanies = async () => {
     try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/users/settings/system`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      const response = await fetch(`${API_BASE_URL}/api/companies`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       if (response.ok) {
         const data = await response.json();
+        setCompanies(data.companies || []);
+        if (data.companies && data.companies.length > 0) {
+          setSelectedCompanyId(data.companies[0].id); // Automatically select the first company
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching companies:', error);
+    }
+  };
+
+  const fetchSettings = async () => {
+    setLoading(true);
+    try {
+      const query = (user?.role === 'SuperAdmin' && selectedCompanyId) ? `?cid=${selectedCompanyId}` : '';
+      const response = await fetch(`${API_BASE_URL}/api/users/settings/system${query}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      const data = await response.json();
+      if (response.ok) {
         const incomingSettings = data.settings || {};
+        // Merge with defaults to ensure all keys exist
         setSettings(prev => ({
           ...prev,
           ...incomingSettings,
@@ -53,13 +86,28 @@ const Settings = () => {
             ...(incomingSettings.attendance || {})
           }
         }));
+      } else {
+        setMessage({ type: 'error', text: data.detail || 'Failed to fetch settings' });
       }
-    } catch (err) {
-      console.error('Failed to fetch settings:', err);
+    } catch (error) {
+      setMessage({ type: 'error', text: 'Error connecting to server' });
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (user?.role === 'SuperAdmin') {
+      fetchCompanies();
+    }
+    fetchSettings();
+  }, [user]);
+
+  useEffect(() => {
+    if (user?.role === 'SuperAdmin' && selectedCompanyId) { // Only fetch if selectedCompanyId is set for SuperAdmin
+      fetchSettings();
+    }
+  }, [selectedCompanyId, user]); // Added user to dependency array for consistency
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -79,6 +127,14 @@ const Settings = () => {
         [name]: type === 'checkbox' ? checked : (type === 'number' ? parseInt(value) || 0 : value)
       }));
     }
+  };
+
+  const handleToggleChange = (e) => {
+    const { name, checked } = e.target;
+    setSettings(prev => ({
+      ...prev,
+      [name]: checked
+    }));
   };
 
   const handleSubmit = async (e) => {
@@ -126,6 +182,29 @@ const Settings = () => {
       )}
 
       <form onSubmit={handleSubmit} className="settings-form">
+        {user?.role === 'SuperAdmin' && (
+          <div className="settings-section" style={{ borderLeft: '4px solid var(--primary-color)' }}>
+            <div className="section-title">
+              <ShieldCheck size={18} />
+              <h3>Configuration Target</h3>
+            </div>
+            <p className="section-desc">Select which organization's settings you want to manage. Leave as "System Default" for global settings.</p>
+            <div className="form-group" style={{ maxWidth: '400px' }}>
+              <label>Organization / Company</label>
+              <select 
+                value={selectedCompanyId} 
+                onChange={(e) => setSelectedCompanyId(e.target.value)}
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+              >
+                <option value="">System Default (Global)</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
         {user?.role === 'SuperAdmin' && (
           <>
             <div className="settings-section">
@@ -226,82 +305,156 @@ const Settings = () => {
                 </div>
               </div>
             </div>
-
-            <div className="settings-section">
-              <div className="section-title">
-                <Server size={18} />
-                <h3>Attendance Configuration</h3>
-              </div>
-              <p className="section-desc">Set global thresholds for punch-in, punch-out, and daily targets.</p>
-              <div className="settings-grid">
-                <div className="form-group">
-                  <label>Punch In Time (Late Threshold)</label>
-                  <input
-                    type="time"
-                    name="attendance.punch_in"
-                    value={settings.attendance?.punch_in || '09:30'}
-                    onChange={handleInputChange}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Punch Out Time</label>
-                  <input
-                    type="time"
-                    name="attendance.punch_out"
-                    value={settings.attendance?.punch_out || '18:00'}
-                    onChange={handleInputChange}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Target Working Hours</label>
-                  <input
-                    type="number"
-                    name="attendance.working_hours"
-                    value={settings.attendance?.working_hours || 8}
-                    onChange={handleInputChange}
-                    min="1"
-                    max="24"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Grace Period (Minutes)</label>
-                  <input
-                    type="number"
-                    name="attendance.grace_minutes"
-                    value={settings.attendance?.grace_minutes || 0}
-                    onChange={handleInputChange}
-                    min="0"
-                    max="120"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Min Hours Present (Threshold)</label>
-                  <input
-                    type="number"
-                    name="attendance.min_hours_present"
-                    value={settings.attendance?.min_hours_present || 0}
-                    onChange={handleInputChange}
-                    min="0"
-                    max="24"
-                    step="0.5"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Overtime After (Hours)</label>
-                  <input
-                    type="number"
-                    name="attendance.overtime_after"
-                    value={settings.attendance?.overtime_after || 0}
-                    onChange={handleInputChange}
-                    min="1"
-                    max="24"
-                    step="0.5"
-                  />
-                </div>
-              </div>
-            </div>
           </>
         )}
+
+        {/* Face Recognition Master Toggle */}
+        <div className="settings-section master-toggle-section">
+          <div className="section-header-row">
+            <div className="section-title">
+              <Shield size={20} />
+              <h3>Face Recognition System</h3>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                name="face_recognition_enabled"
+                checked={settings.face_recognition_enabled}
+                onChange={handleToggleChange}
+              />
+              <span className="slider round"></span>
+            </label>
+          </div>
+          <p className="section-desc">Enable or disable the core face recognition pipeline and detection features.</p>
+          
+          <div className={`settings-grid sub-settings ${!settings.face_recognition_enabled ? 'greyed-out' : ''}`}>
+            <div className="checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  name="show_bounding_boxes"
+                  checked={settings.show_bounding_boxes}
+                  onChange={handleToggleChange}
+                  disabled={!settings.face_recognition_enabled}
+                />
+                Show Bounding Boxes on Streams
+              </label>
+            </div>
+            <div className="checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  name="unknown_detection_enabled"
+                  checked={settings.unknown_detection_enabled}
+                  onChange={handleToggleChange}
+                  disabled={!settings.face_recognition_enabled}
+                />
+                Detect & Save Unknown Faces
+              </label>
+            </div>
+            <div className="checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  name="long_distance_detection_enabled"
+                  checked={settings.long_distance_detection_enabled}
+                  onChange={handleToggleChange}
+                  disabled={!settings.face_recognition_enabled}
+                />
+                Long Distance Detection Mode
+              </label>
+            </div>
+            {settings.long_distance_detection_enabled && (
+              <div className="form-group">
+                <label>Minimum Face Size (pixels)</label>
+                <input
+                  type="number"
+                  name="min_face_size"
+                  value={settings.min_face_size}
+                  onChange={handleInputChange}
+                  disabled={!settings.face_recognition_enabled}
+                  min="20"
+                  max="200"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Attendance Settings - Visible to SuperAdmin and Admin */}
+        <div className="settings-section">
+          <div className="section-title">
+            <Server size={18} />
+            <h3>Attendance Configuration</h3>
+          </div>
+          <p className="section-desc">Set global thresholds for punch-in, punch-out, and daily targets.</p>
+          <div className="settings-grid">
+            <div className="form-group">
+              <label>Punch In Time (Late Threshold)</label>
+              <input
+                type="time"
+                name="attendance.punch_in"
+                value={settings.attendance?.punch_in || '09:30'}
+                onChange={handleInputChange}
+              />
+            </div>
+            <div className="form-group">
+              <label>Punch Out Time</label>
+              <input
+                type="time"
+                name="attendance.punch_out"
+                value={settings.attendance?.punch_out || '18:00'}
+                onChange={handleInputChange}
+              />
+            </div>
+            <div className="form-group">
+              <label>Target Working Hours</label>
+              <input
+                type="number"
+                name="attendance.working_hours"
+                value={settings.attendance?.working_hours || 8}
+                onChange={handleInputChange}
+                min="1"
+                max="24"
+              />
+            </div>
+            <div className="form-group">
+              <label>Grace Period (Minutes)</label>
+              <input
+                type="number"
+                name="attendance.grace_minutes"
+                value={settings.attendance?.grace_minutes || 0}
+                onChange={handleInputChange}
+                min="0"
+                max="120"
+              />
+            </div>
+            <div className="form-group">
+              <label>Min Hours Present (Threshold)</label>
+              <input
+                type="number"
+                name="attendance.min_hours_present"
+                value={settings.attendance?.min_hours_present || 0}
+                onChange={handleInputChange}
+                min="0"
+                max="24"
+                step="0.5"
+              />
+            </div>
+            <div className="form-group">
+              <label>Overtime After (Hours)</label>
+              <input
+                type="number"
+                name="attendance.overtime_after"
+                value={settings.attendance?.overtime_after || 0}
+                onChange={handleInputChange}
+                min="1"
+                max="24"
+                step="0.5"
+              />
+            </div>
+          </div>
+        </div>
 
         {user?.role === 'Admin' && (
           <div className="settings-section">

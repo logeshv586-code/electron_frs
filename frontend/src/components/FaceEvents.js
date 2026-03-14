@@ -399,7 +399,7 @@ const FaceEvents = () => {
                           <span>{face.name}</span>
                         </div>
                       </td>
-                      <td>{face.camera}</td>
+                      <td>{face.camera || 'Default Source'}</td>
                       <td>{format(new Date(face.timestamp), 'yyyy-MM-dd HH:mm:ss')}</td>
                       <td>
                         <span className={`badge ${face.name === 'Unknown' ? 'badge-unknown' : 'badge-known'}`}>
@@ -454,7 +454,7 @@ const FaceEvents = () => {
               </div>
               <div className="modal-details">
                 <p><strong>Name:</strong> <span>{selectedEvent.name}</span></p>
-                <p><strong>Camera:</strong> <span>{selectedEvent.camera}</span></p>
+                <p><strong>Camera:</strong> <span>{selectedEvent.camera || 'Default Source'}</span></p>
                 <p><strong>Time:</strong> <span>{format(new Date(selectedEvent.timestamp), 'yyyy-MM-dd HH:mm:ss')}</span></p>
                 <p><strong>Type:</strong> <span className={`badge ${selectedEvent.name === 'Unknown' ? 'badge-unknown' : 'badge-known'}`}>{selectedEvent.name === 'Unknown' ? 'Unknown' : 'Known'}</span></p>
               </div>

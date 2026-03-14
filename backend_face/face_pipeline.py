@@ -763,7 +763,10 @@ def render_bounding_boxes(frame: np.ndarray, detections: List[Dict[str, Any]], s
     Returns:
         Annotated frame (copy) if show_bounding_box is True, otherwise the original frame
     """
-    if not show_bounding_box or not detections:
+    if not show_bounding_box:
+        return frame
+    
+    if not detections:
         return frame
     
     annotated = frame.copy()

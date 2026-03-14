@@ -21,7 +21,7 @@ class CameraStreamManager:
         self.active_streams: Dict[str, Dict] = {}
         self.stream_lock = threading.Lock()
         # Bounding box visualization toggle (default: off)
-        self.show_bounding_box: bool = False
+        self.show_bounding_box: bool = True
         # Per-stream frame shared state (replaces queues to prevent buffering/looping)
         self.current_frames: Dict[str, Tuple[np.ndarray, int]] = {}  # The absolute latest raw frame to process
         self.processed_frames_latest: Dict[str, np.ndarray] = {}  # The absolute latest processed frame
@@ -354,8 +354,11 @@ class CameraStreamManager:
                             from face_pipeline import render_bounding_boxes
                             processed_frame, detections = face_process_frame(frame, force_process=True, stream_id=stream_id)
                             # Only render bounding boxes from THIS frame's fresh detections
-                            if self.show_bounding_box and detections:
-                                processed_frame = render_bounding_boxes(processed_frame, detections, show_bounding_box=True)
+                            if self.show_bounding_box:
+                                if detections:
+                                    processed_frame = render_bounding_boxes(processed_frame, detections, show_bounding_box=True)
+                                else:
+                                    pass # No faces found
                             self.processed_frames_latest[stream_id] = processed_frame
                         except Exception as face_error:
                             logger.debug(f"Face processing error for stream {stream_id}: {face_error}")

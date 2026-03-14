@@ -24,8 +24,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 FACE_PIPELINE_READY = False
 
-# Global bounding box toggle (default: off)
-show_bounding_box = False
+# Global bounding box toggle (default: on)
+show_bounding_box = True
 
 # Create main FastAPI app
 app = FastAPI(

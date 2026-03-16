@@ -265,7 +265,7 @@ const Settings = () => {
               <select 
                 value={selectedCompanyId} 
                 onChange={(e) => setSelectedCompanyId(e.target.value)}
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+                className="settings-select"
               >
                 <option value="">System Default (Global)</option>
                 {companies.map(c => (

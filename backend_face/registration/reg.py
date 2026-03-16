@@ -1252,17 +1252,76 @@ async def update_person_metadata(person_id: str, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/metadata/person/{person_id}")
-async def delete_person_metadata(person_id: str):
-    """Delete a person from metadata"""
+async def delete_person_metadata(request: Request, person_id: str):
+    """Delete a person from metadata and all associated data"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        
+        # Use MetadataManager's logic to handle both nested and flat metadata
         metadata = MetadataManager.load_metadata()
-        if person_id not in metadata.get("persons", {}):
+        
+        # Determine if it's nested or flat structure
+        # (Mirroring the logic in get_gallery etc.)
+        persons_map = {}
+        if isinstance(metadata, dict):
+            if "persons" in metadata and isinstance(metadata["persons"], dict):
+                persons_map = metadata["persons"]
+            else:
+                persons_map = metadata
+        
+        if person_id not in persons_map:
             raise HTTPException(status_code=404, detail="Person not found")
-        del metadata["persons"][person_id]
-        if MetadataManager.save_metadata(metadata):
-            return {"status": "success"}
-        raise HTTPException(status_code=500, detail="Failed to save metadata")
+        
+        # Verify ownership/access
+        person_info = persons_map[person_id]
+        if company_id and person_info.get("company_id") != company_id:
+            # Check if this person belongs to this company
+            if person_info.get("company_id") is not None: # only enforce if company_id is set
+                raise HTTPException(status_code=403, detail="Unauthorized to delete this person")
+
+        # 1. Delete Gallery folder
+        # Try both structured and legacy paths
+        paths_to_clean = [
+            os.path.join(GALLERY_DIR, company_id or "default", person_id),
+            os.path.join(GALLERY_DIR, person_id)
+        ]
+        for p in paths_to_clean:
+            if os.path.exists(p):
+                shutil.rmtree(p, ignore_errors=True)
+            
+        # 2. Delete Augmented Data folder (biometrics)
+        data_paths = [
+            os.path.join(DATA_DIR, company_id or "default", person_id),
+            os.path.join(DATA_DIR, person_id)
+        ]
+        for p in data_paths:
+            if os.path.exists(p):
+                shutil.rmtree(p, ignore_errors=True)
+            
+        # 3. Delete from metadata
+        if "persons" in metadata and person_id in metadata["persons"]:
+            del metadata["persons"][person_id]
+        if person_id in metadata:
+            del metadata[person_id]
+            
+        MetadataManager.save_metadata(metadata)
+        
+        # 4. Cleanup captured events (the actual captured photos)
+        # captured_faces/known/{company_id}/{camera}/{person_name}/
+        known_base = os.path.join(BASE_DIR, "captured_faces", "known", company_id or "default")
+        if os.path.exists(known_base):
+            for camera in os.listdir(known_base):
+                cam_pers_dir = os.path.join(known_base, camera, person_id)
+                if os.path.exists(cam_pers_dir):
+                    shutil.rmtree(cam_pers_dir, ignore_errors=True)
+                    
+        logger.info(f"Deep delete completed for person: {person_id}")
+        return {"status": "success", "message": f"Successfully deleted {person_id} and all related biometric data"}
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Error in deep delete: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/metadata/statistics")

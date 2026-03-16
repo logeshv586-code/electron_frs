@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, Image as ImageIcon, Upload, Check, Info, RefreshCw, FileSpreadsheet, Folder, AlertCircle, Download, FileText } from 'lucide-react';
+import { User, Image as ImageIcon, Upload, Check, Info, RefreshCw, FileSpreadsheet, Folder, AlertCircle, Download, FileText, Trash2 } from 'lucide-react';
 import useAuthStore from '../store/authStore';
 import './RegistrationWidget.css';
 
@@ -227,6 +227,32 @@ const RegistrationWidget = () => {
       showMessage('Failed to connect to server. Please ensure the backend is running.', 'error');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDeletePerson = async (personId) => {
+    if (!window.confirm(`Are you sure you want to delete this person and all their biometric data? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/registration/metadata/person/${personId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        showMessage('Person deleted successfully', 'success');
+        fetchEmployees(); // Refresh list
+      } else {
+        const error = await response.json();
+        showMessage(error.detail || 'Failed to delete person', 'error');
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
+      showMessage('Failed to connect to server', 'error');
     }
   };
 
@@ -459,6 +485,7 @@ const RegistrationWidget = () => {
                         <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Email</th>
                         <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Phone</th>
                         <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Status</th>
+                        <th style={{ padding: '12px', textAlign: 'center', borderBottom: '1px solid var(--border-color)' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -489,11 +516,31 @@ const RegistrationWidget = () => {
                               {emp.status || 'Active'}
                             </span>
                           </td>
+                          <td style={{ padding: '12px', textAlign: 'center' }}>
+                            <button 
+                              onClick={() => handleDeletePerson(emp.id)}
+                              className="btn-icon-delete"
+                              title="Delete Person"
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#ef4444',
+                                cursor: 'pointer',
+                                padding: '4px',
+                                borderRadius: '4px',
+                                transition: 'background 0.2s'
+                              }}
+                              onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                              onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
                         </tr>
                       ))}
                       {filtered.length === 0 && (
                         <tr>
-                          <td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No employees found</td>
+                          <td colSpan="8" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No employees found</td>
                         </tr>
                       )}
                     </tbody>

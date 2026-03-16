@@ -12,11 +12,20 @@
   "long_distance_detection_enabled": false,
   "min_face_size": 40,
   "attendance": {
-    "punch_in": "09:30",
+    "punch_in": "10:30",
     "punch_out": "18:00",
-    "working_hours": 8,
+    "working_hours": 6.0,
     "grace_minutes": 15,
     "min_hours_present": 4.0,
     "overtime_after": 10.0
-  }
+  },
+  "max_cameras_per_admin": 10,
+  "max_cameras_per_supervisor": 5,
+  "require_approval_for_new_users": false,
+  "smtp_host": "",
+  "smtp_port": 587,
+  "smtp_user": "eagleai",
+  "smtp_password": "password123",
+  "smtp_use_tls": true,
+  "email_from": ""
 }

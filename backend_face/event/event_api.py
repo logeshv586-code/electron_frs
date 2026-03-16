@@ -144,6 +144,56 @@ def load_camera_name_map() -> Dict[str, str]:
     
     return {}
 
+@router.delete("/delete")
+async def delete_event(
+    request: Request,
+    image_path: str = Query(..., description="Path to the event image")
+):
+    """Delete a specific event image file."""
+    try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        
+        # Sanitize path
+        # If it's a URL, extract the path part if possible, but frontend should send relative path
+        clean_path = image_path
+        if clean_path.startswith('/api/captured/image/'):
+            # Convert URL back to filesystem path (best effort)
+             # But it's safer to have frontend send the path it got from the API
+             pass
+        
+        # Check if it's absolute, if not make it relative to BASE_DIR
+        abs_path = os.path.normpath(clean_path)
+        if not os.path.isabs(abs_path):
+            backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            abs_path = os.path.join(backend_root, clean_path)
+            
+        abs_path = os.path.abspath(abs_path)
+        captured_faces_root = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "captured_faces"))
+
+        # Safety check: must be inside captured_faces
+        if not abs_path.startswith(captured_faces_root):
+            raise HTTPException(status_code=403, detail="Forbidden: Cannot delete files outside captured_faces")
+
+        # Multi-tenancy check
+        if current_user.get("role") != "SuperAdmin":
+            if company_id not in abs_path.replace('\\', '/') and "/default/" not in abs_path.replace('\\', '/'):
+                raise HTTPException(status_code=403, detail="Unauthorized to delete this company's data")
+
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+            logger.info(f"Event image deleted: {abs_path}")
+            return {"status": "success", "message": "Event deleted successfully"}
+        else:
+             # Try one more fallback: maybe it's just the filename?
+             raise HTTPException(status_code=404, detail=f"Event file not found at {abs_path}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting event: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 class FaceEvent(BaseModel):
     name: str
     image_path: str

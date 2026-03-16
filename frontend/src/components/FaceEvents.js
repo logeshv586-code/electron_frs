@@ -13,7 +13,9 @@ import {
   Filter,
   User,
   Camera,
-  ChevronDown
+  ChevronDown,
+  Trash2,
+  Clock as ClockIcon
 } from 'lucide-react';
 import FaceCard from './FaceCard';
 import "react-datepicker/dist/react-datepicker.css";
@@ -182,6 +184,24 @@ const FaceEvents = () => {
       overrides.to_date = null;
     }
     handleFilter(overrides, activeTab);
+  };
+  
+  const handleDeleteEvent = async (event) => {
+    if (!window.confirm('Are you sure you want to delete this event? This will remove the image file from the server.')) return;
+    try {
+      await axios.delete(`${API_BASE_URL}/delete`, {
+        params: { image_path: event.image_path },
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      // Refresh list
+      handleFilter({}, activeTab);
+      if (selectedEvent && selectedEvent.image_path === event.image_path) {
+        setSelectedEvent(null);
+      }
+    } catch (err) {
+      console.error("Delete event failed", err);
+      alert("Failed to delete event: " + (err.response?.data?.detail || err.message));
+    }
   };
 
   useEffect(() => {
@@ -407,7 +427,24 @@ const FaceEvents = () => {
                         </span>
                       </td>
                       <td>
-                        <button className="btn-action" onClick={() => setSelectedEvent(face)}>View</button>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button className="btn-action" onClick={() => setSelectedEvent(face)}>View</button>
+                          <button 
+                            className="btn-action" 
+                            style={{ 
+                              background: 'transparent', 
+                              color: '#ef4444', 
+                              borderColor: '#ef4444',
+                              padding: '2px 8px'
+                            }} 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteEvent(face);
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -458,6 +495,24 @@ const FaceEvents = () => {
                 <p><strong>Time:</strong> <span>{format(new Date(selectedEvent.timestamp), 'yyyy-MM-dd HH:mm:ss')}</span></p>
                 <p><strong>Type:</strong> <span className={`badge ${selectedEvent.name === 'Unknown' ? 'badge-unknown' : 'badge-known'}`}>{selectedEvent.name === 'Unknown' ? 'Unknown' : 'Known'}</span></p>
               </div>
+              <div style={{ padding: '0 20px 20px', display: 'flex', justifyContent: 'flex-end' }}>
+                 <button 
+                    className="btn-action" 
+                    style={{ 
+                       background: '#ef4444', 
+                       color: 'white', 
+                       border: 'none',
+                       display: 'flex',
+                       alignItems: 'center',
+                       gap: '8px',
+                       padding: '8px 16px',
+                       cursor: 'pointer'
+                    }}
+                    onClick={() => handleDeleteEvent(selectedEvent)}
+                 >
+                    <Trash2 size={16} /> Delete Event
+                 </button>
+              </div>
             </div>
           </div>
         </div>,
@@ -466,12 +521,5 @@ const FaceEvents = () => {
     </div>
   );
 };
-
-const ClockIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"></circle>
-    <polyline points="12 6 12 12 16 14"></polyline>
-  </svg>
-);
 
 export default FaceEvents;

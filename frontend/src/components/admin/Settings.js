@@ -50,14 +50,15 @@ const Settings = () => {
 
   const fetchCompanies = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/companies`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      const response = await fetch(`${API_BASE_URL}/api/companies/`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
       });
       if (response.ok) {
         const data = await response.json();
         setCompanies(data.companies || []);
         if (data.companies && data.companies.length > 0) {
-          setSelectedCompanyId(data.companies[0].id); // Automatically select the first company
+          // If no company selected, select the first one
+          setSelectedCompanyId(prev => prev || data.companies[0].id);
         }
       }
     } catch (error) {
@@ -71,7 +72,7 @@ const Settings = () => {
       const query = (user?.role === 'SuperAdmin' && selectedCompanyId) ? `?cid=${selectedCompanyId}` : '';
       const response = await fetch(`${API_BASE_URL}/api/users/settings/system${query}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         }
       });
       const data = await response.json();
@@ -137,28 +138,103 @@ const Settings = () => {
     }));
   };
 
+  /* 
+     Activity History: Stores the last 5 operations (Success or Error)
+     Each entry: { id, type, message, timestamp }
+  */
+  const [history, setHistory] = useState(() => {
+    const saved = localStorage.getItem('settings_history');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('settings_history', JSON.stringify(history));
+  }, [history]);
+
+  const addLogEntry = (type, text) => {
+    const newEntry = {
+      id: Date.now(),
+      type,
+      message: text,
+      timestamp: new Date().toLocaleTimeString()
+    };
+    setHistory(prev => [newEntry, ...prev].slice(0, 5));
+    setMessage({ type, text });
+  };
+
+  const calculateWindow = () => {
+    const { punch_in, punch_out } = settings.attendance || {};
+    if (!punch_in || !punch_out) return 0;
+    
+    const [h1, m1] = punch_in.split(':').map(Number);
+    const [h2, m2] = punch_out.split(':').map(Number);
+    
+    const d1 = new Date(); d1.setHours(h1, m1, 0);
+    const d2 = new Date(); d2.setHours(h2, m2, 0);
+    
+    let diff = (d2 - d1) / (1000 * 60 * 60);
+    if (diff < 0) diff += 24; // Handle overnight shifts if needed
+    return diff;
+  };
+
+  const humanizeError = (detail) => {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail.map(err => {
+        // Last part of the location is the field name
+        let field = err.loc[err.loc.length - 1];
+        if (field === 'body' || field === 'attendance') {
+           field = err.loc[err.loc.length - 2] || field;
+        }
+        
+        // Clean up field name: max_cameras_per_admin -> Max Cameras Per Admin
+        const displayField = field.toString().replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        
+        let msg = err.msg;
+        // Strip technical prefixes added by backend or pydantic
+        if (msg.includes('Value error, ')) msg = msg.split('Value error, ')[1];
+        
+        return `${displayField}: ${msg}`;
+      }).join('. ');
+    }
+    return JSON.stringify(detail);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       setLoading(true);
       setMessage({ type: '', text: '' });
-      const response = await fetch(`${API_BASE_URL}/api/users/settings/system`, {
+      
+      // Client-side validation for attendance window
+      const windowHours = calculateWindow();
+      const workingHours = settings.attendance?.working_hours || 0;
+      
+      if (workingHours > windowHours) {
+        throw new Error(`Invalid Configuration: Target Working Hours (${workingHours}h) cannot exceed the time window between Punch In and Punch Out (${windowHours.toFixed(1)}h).`);
+      }
+
+      const query = (user?.role === 'SuperAdmin' && selectedCompanyId) ? `?cid=${selectedCompanyId}` : '';
+      const response = await fetch(`${API_BASE_URL}/api/users/settings/system${query}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         },
         body: JSON.stringify(settings)
       });
 
+      const data = await response.json();
       if (response.ok) {
-        setMessage({ type: 'success', text: 'Settings updated successfully' });
+        addLogEntry('success', 'System settings saved successfully');
       } else {
-        const data = await response.json();
+        if (response.status === 422 && data.detail) {
+          throw new Error(humanizeError(data.detail));
+        }
         throw new Error(data.detail || 'Failed to update settings');
       }
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      addLogEntry('error', err.message);
     } finally {
       setLoading(false);
     }
@@ -175,11 +251,6 @@ const Settings = () => {
         <p>Configure global system parameters and email notifications</p>
       </div>
 
-      {message.text && (
-        <div className={`settings-message ${message.type}`}>
-          {message.text}
-        </div>
-      )}
 
       <form onSubmit={handleSubmit} className="settings-form">
         {user?.role === 'SuperAdmin' && (
@@ -473,6 +544,53 @@ const Settings = () => {
           </button>
         </div>
       </form>
+
+      {/* Settings Activity Log - Persistent History */}
+      <div className="settings-section history-section" style={{ marginTop: '30px', borderTop: '2px solid var(--border-color)' }}>
+        <div className="section-title">
+          <Server size={18} />
+          <h3>Settings Activity Log</h3>
+        </div>
+        <p className="section-desc">History of recent configuration changes and validation status.</p>
+        
+        <div className="history-list">
+          {history.length === 0 ? (
+            <p style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+              No recent activity recorded.
+            </p>
+          ) : (
+            history.map(entry => (
+              <div key={entry.id} className={`history-entry ${entry.type}`}>
+                <div className="entry-header">
+                  <span className={`entry-status ${entry.type}`}>
+                    {entry.type === 'success' ? '✓ SUCCESS' : '⚠ FAILED'}
+                  </span>
+                  <span className="entry-time">{entry.timestamp}</span>
+                </div>
+                <div className="entry-message">{entry.message}</div>
+              </div>
+            ))
+          )}
+        </div>
+        
+        {history.length > 0 && (
+          <button 
+            className="clear-history-btn"
+            onClick={() => setHistory([])}
+            style={{ 
+              marginTop: '15px', 
+              background: 'transparent', 
+              border: 'none', 
+              color: 'var(--text-secondary)', 
+              fontSize: '11px', 
+              cursor: 'pointer',
+              textDecoration: 'underline'
+            }}
+          >
+            Clear Log History
+          </button>
+        )}
+      </div>
     </div>
   );
 };

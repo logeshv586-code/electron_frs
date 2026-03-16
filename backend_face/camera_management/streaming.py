@@ -20,8 +20,8 @@ class CameraStreamManager:
     def __init__(self):
         self.active_streams: Dict[str, Dict] = {}
         self.stream_lock = threading.Lock()
-        # Bounding box visualization toggle (default: True)
-        self.show_bounding_box: bool = True
+        # Per-company bounding box visualization toggle (company_id -> bool)
+        self.company_bounding_boxes: Dict[str, bool] = {}
         
         # Diagnostic logging for singleton verification
         instance_id = id(self)
@@ -142,14 +142,17 @@ class CameraStreamManager:
                     return stream_id
         return None
     
-    def set_bounding_box(self, enabled: bool) -> None:
-        """Set bounding box visualization toggle."""
-        self.show_bounding_box = enabled
-        logger.info(f"CameraStreamManager (ID: {id(self)}) bounding box visualization {'enabled' if enabled else 'disabled'}")
+    def set_bounding_box(self, enabled: bool, company_id: Optional[str] = None) -> None:
+        """Set bounding box visualization toggle for a company."""
+        cid = company_id or "default"
+        self.company_bounding_boxes[cid] = enabled
+        logger.info(f"CameraStreamManager bounding box visualization {'enabled' if enabled else 'disabled'} for company: {cid}")
     
-    def get_bounding_box(self) -> bool:
-        """Get current bounding box toggle state."""
-        return self.show_bounding_box
+    def get_bounding_box(self, company_id: Optional[str] = None) -> bool:
+        """Get bounding box toggle state for a company."""
+        cid = company_id or "default"
+        # Return setting from cache or default to True
+        return self.company_bounding_boxes.get(cid, True)
     
     def _validate_frame(self, frame: np.ndarray) -> bool:
         """Validate frame quality - check for corruption or pixelation"""
@@ -333,28 +336,23 @@ class CameraStreamManager:
                     # Pass raw frame only – re-rendering stale tracking data
                     # causes ghost bounding boxes and wastes CPU every other frame.
                     if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
-                        self.processed_frames_latest[stream_id] = frame.copy()
+                        # Skip processing for this frame to maintain performance
+                        pass
                     else:
-                        # Process frame for face detection
+                        # Process frame for face detection only
                         try:
                             from face_pipeline import process_frame as face_process_frame
-                            from face_pipeline import render_bounding_boxes
-                            processed_frame, detections = face_process_frame(frame, force_process=True, stream_id=stream_id)
-                            # Broad diagnostic: Are we detecting anything?
-                            if detections:
-                                logger.info(f"[BBOX-STRE-PRE] Detected {len(detections)} faces. Toggle={self.show_bounding_box}")
+                            # We don't render here anymore. We just get detections.
+                            _, detections = face_process_frame(frame, force_process=True, stream_id=stream_id)
                             
-                            # Only render when faces were actually detected in THIS frame.
-                            if self.show_bounding_box and detections:
-                                logger.info(f"[BBOX-STRE] show={self.show_bounding_box}, detections={len(detections)}")
-                                processed_frame = render_bounding_boxes(
-                                    processed_frame, detections, show_bounding_box=True
-                                )
+                            # Store detections thread-safely for the rendering generator
+                            with self.detections_lock:
+                                self.latest_detections[stream_id] = detections
                         except Exception as e:
                             logger.error(f"Error in face processing: {e}")
-                            processed_frame = frame
-                        
-                        self.processed_frames_latest[stream_id] = processed_frame.copy()
+                            # Keep old detections if error occurs? Or clear? 
+                            # Let's keep them for a short time for stability.
+                            pass
                             
                 except Exception as e:
                     logger.error(f"Error in face processing worker for {stream_id}: {e}")
@@ -446,13 +444,29 @@ class CameraStreamManager:
                     frame_count += 1
                     self.frame_counters[stream_id] = frame_count
 
-                    # Shared state update for face processing
+                    # Shared state update for face processing background worker
                     self.current_frames[stream_id] = (frame.copy(), frame_count)
 
-                    # Get processed frame (async)
-                    processed_frame = self.processed_frames_latest.get(stream_id, frame)
-                    if processed_frame is None or processed_frame.size < 100:
-                        processed_frame = frame
+                    # --- RENDERING PHASE (Synchronous with stream for flicker-free UI) ---
+                    # 1. Get current detections thread-safely
+                    with self.detections_lock:
+                        detections = self.latest_detections.get(stream_id, [])
+
+                    # 2. Get toggle status for this company
+                    cid = stream_info.get('company_id') or "default"
+                    show_bbox = self.get_bounding_box(cid)
+
+                    # 3. Render if enabled
+                    processed_frame = frame
+                    if show_bbox and detections:
+                        try:
+                            from face_pipeline import render_bounding_boxes
+                            processed_frame = render_bounding_boxes(
+                                frame.copy(), detections, show_bounding_box=True
+                            )
+                        except Exception as e:
+                            logger.error(f"Rendering error in stream: {e}")
+                            processed_frame = frame
 
                     # Encode and yield
                     try:
@@ -529,6 +543,21 @@ class CameraStreamManager:
                 # Add timestamp in corner
                 cv2.putText(frame, f"Uptime: {int(elapsed)}s", (450, 450),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+                # Get latest detections and toggle status
+                with self.detections_lock:
+                    detections = self.latest_detections.get(stream_id, [])
+                
+                cid = stream_info.get('company_id') or "default"
+                show_bbox = self.get_bounding_box(cid)
+
+                # Render detections on demo frame
+                if show_bbox and detections:
+                    try:
+                        from face_pipeline import render_bounding_boxes
+                        frame = render_bounding_boxes(frame, detections, show_bounding_box=True)
+                    except Exception as e:
+                        logger.error(f"Demo rendering error: {e}")
 
                 # Encode frame as JPEG
                 ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])

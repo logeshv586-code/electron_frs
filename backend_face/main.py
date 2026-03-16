@@ -24,8 +24,33 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 FACE_PIPELINE_READY = False
 
-# Global bounding box toggle (default: on)
-show_bounding_box = True
+# Global bounding box settings cache (company_id -> bool)
+# Loaded from auth/storage.py on demand
+company_bbox_settings: Dict[str, bool] = {}
+bbox_lock = threading.Lock()
+
+def get_company_bbox_setting(company_id: Optional[str]) -> bool:
+    """Get bounding box setting for a company, with caching."""
+    # Robustly handle SuperAdmin (None/empty) to use 'default'
+    cid = company_id if company_id and str(company_id).strip() else "default"
+    
+    with bbox_lock:
+        if cid in company_bbox_settings:
+            return company_bbox_settings[cid]
+            
+    # Load from storage
+    try:
+        from auth.storage import get_settings
+        settings = get_settings(cid)
+        enabled = settings.get("show_bounding_boxes", True)
+        
+        with bbox_lock:
+            company_bbox_settings[cid] = enabled
+        logger.debug(f"[BBOX-INIT] Loaded settings for {cid}: {enabled}")
+        return enabled
+    except Exception as e:
+        logger.warning(f"Error loading settings for {cid}: {e}")
+        return True
 
 # Create main FastAPI app
 app = FastAPI(
@@ -1033,12 +1058,15 @@ def generate_mjpeg_stream(stream_id: str):
                     )
                     # Broad diagnostic: Are we detecting anything?
                     if detections:
-                        logger.info(f"[BBOX-MAIN-PRE] Detected {len(detections)} faces. Toggle={show_bounding_box}")
+                        logger.info(f"[BBOX-MAIN-PRE] Detected {len(detections)} faces. Toggle={get_company_bbox_setting(stream_company_id)}")
                     
                     # Only render when faces were actually detected in THIS frame.
                     # An empty list or None means no faces – skip entirely.
-                    if show_bounding_box and detections:
-                        logger.info(f"[BBOX-MAIN] show={show_bounding_box}, detections={len(detections)}")
+                    # Get bounding box setting for this stream's company
+                    show_bbox = get_company_bbox_setting(stream_company_id)
+                    
+                    if show_bbox and detections:
+                        logger.info(f"[BBOX-MAIN] show={show_bbox}, detections={len(detections)}, company={stream_company_id}")
                         processed_frame = render_bounding_boxes(
                             processed_frame, detections, show_bounding_box=True
                         )
@@ -1204,30 +1232,54 @@ class BoundingBoxToggle(BaseModel):
     enabled: bool
 
 @app.post("/api/bounding-box/toggle", tags=["Visualization"])
-async def toggle_bounding_box(payload: BoundingBoxToggle):
+async def toggle_bounding_box(request: Request, payload: BoundingBoxToggle):
     """Toggle bounding box visualization on the video stream.
     
     When enabled, bounding boxes are drawn on detected faces.
     When disabled, the video stream is shown without any overlays.
     This does NOT affect detection, recognition, or event-saving.
     """
-    global show_bounding_box
-    show_bounding_box = payload.enabled
+    current_user = request.scope.get("user", {})
+    company_id: Optional[str] = None
+    # If Admin or Supervisor, force company_id from their account
+    if current_user.get("role") != "SuperAdmin":
+        company_id = current_user.get("company_id")
+    else:
+        # SuperAdmin might want to toggle a specific company if provided, 
+        # but for global/default viewer, use 'default'
+        company_id = "default"
+        
+    company_id = company_id if company_id and str(company_id).strip() else "default"
     
-    # Also update the managed camera stream manager
+    # Update cache
+    with bbox_lock:
+        company_bbox_settings[company_id] = payload.enabled
+    
+    # Persist in storage
+    try:
+        from auth.storage import get_settings, save_settings
+        settings = get_settings(company_id)
+        settings["show_bounding_boxes"] = payload.enabled
+        save_settings(settings, company_id)
+        logger.info(f"[BBOX-TOGG] {payload.enabled} for {company_id}")
+    except Exception as e:
+        logger.error(f"Error saving bbox toggle for {company_id}: {e}")
+        
+    # Update stream manager
     try:
         from camera_management.streaming import get_stream_manager
-        get_stream_manager().set_bounding_box(payload.enabled)
+        get_stream_manager().set_bounding_box(company_id, payload.enabled)
     except Exception as e:
-        logger.warning(f"Could not update stream manager bounding box: {e}")
-    
-    logger.info(f"Bounding box visualization {'enabled' if payload.enabled else 'disabled'}")
-    return {"success": True, "enabled": payload.enabled}
+        logger.error(f"Error updating stream manager bbox for {company_id}: {e}")
+        
+    return {"status": "success", "show_bounding_box": payload.enabled}
 
 @app.get("/api/bounding-box/status", tags=["Visualization"])
-async def get_bounding_box_status():
+async def get_bounding_box_status(request: Request):
     """Get current bounding box toggle state."""
-    return {"enabled": show_bounding_box}
+    user = request.scope.get("user", {})
+    company_id = user.get("company_id", "default")
+    return {"enabled": get_company_bbox_setting(company_id), "company_id": company_id}
 
 if __name__ == "__main__":
     import uvicorn

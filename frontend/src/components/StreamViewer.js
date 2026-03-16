@@ -197,13 +197,22 @@ const StreamViewer = () => {
           </div>
 
           <div className="control-group">
-            <button
-              onClick={toggleBoundingBox}
-              className={`btn-bbox-toggle ${showBoundingBox ? 'active' : ''}`}
-              title={showBoundingBox ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
-            >
-              {showBoundingBox ? '⬜ Hide Boxes' : '🔲 Show Boxes'}
-            </button>
+            <div className="bbox-toggle-container">
+              <span className="toggle-label">Show Boxes</span>
+              <button
+                onClick={toggleBoundingBox}
+                className={`advanced-toggle ${showBoundingBox ? 'on' : 'off'}`}
+                title={showBoundingBox ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
+              >
+                <div className="toggle-handle">
+                  {showBoundingBox ? (
+                    <Square size={10} className="handle-icon" fill="currentColor" />
+                  ) : (
+                    <div className="handle-dot" />
+                  )}
+                </div>
+              </button>
+            </div>
           </div>
 
           <div className="control-group">

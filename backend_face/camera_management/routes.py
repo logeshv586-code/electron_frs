@@ -506,11 +506,20 @@ async def get_active_recordings(
 # Collection management endpoints
 @router.get("/")
 async def get_collections(
+    request: Request,
     service: EnhancedCameraService = Depends(get_camera_service)
 ):
     """Get all collections"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id") if current_user.get("role") != "SuperAdmin" else None
+        
         collections = service._load_collections()
+        
+        # Filter by company_id, but always include default collection
+        if company_id:
+            collections = [c for c in collections if c.company_id == company_id or c.id == "default"]
+            
         return {"collections": collections}
     except Exception as e:
         logger.error(f"Error getting collections: {e}")
@@ -518,7 +527,8 @@ async def get_collections(
 
 @router.post("/")
 async def create_collection(
-    request: CollectionCreateRequest,
+    request_data: CollectionCreateRequest,
+    request: Request,
     service: EnhancedCameraService = Depends(get_camera_service)
 ):
     """Create a new collection"""
@@ -527,18 +537,22 @@ async def create_collection(
         from datetime import datetime
         from .models import CameraCollection
         
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        
         collections = service._load_collections()
         
-        # Check for duplicate names
-        if any(c.name.lower() == request.name.lower() for c in collections):
-            raise HTTPException(status_code=409, detail="Collection name already exists")
+        # Check for duplicate names (within the same company)
+        if any(c.name.lower() == request_data.name.lower() and c.company_id == company_id for c in collections):
+            raise HTTPException(status_code=409, detail="Collection name already exists for this company")
         
         new_collection = CameraCollection(
             id=str(uuid.uuid4()),
-            name=request.name,
-            description=request.description,
+            name=request_data.name,
+            description=request_data.description,
             created_at=datetime.now(),
-            camera_count=0
+            camera_count=0,
+            company_id=company_id
         )
         
         collections.append(new_collection)
@@ -554,11 +568,19 @@ async def create_collection(
 @router.put("/{collection_id}")
 async def update_collection(
     collection_id: str,
-    request: CollectionUpdateRequest,
+    request_data: CollectionUpdateRequest,   # Re-aliased parameter to not conflict with FastAPI Request
+    request: Request,                      # Added FastAPI Request for auth
     service: EnhancedCameraService = Depends(get_camera_service)
 ):
     """Update a collection"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id") if current_user.get("role") != "SuperAdmin" else None
+
+        # Prevent editing the default collection
+        if collection_id == "default":
+            raise HTTPException(status_code=400, detail="Cannot edit the default collection")
+
         collections = service._load_collections()
         
         # Find the collection to update
@@ -566,19 +588,23 @@ async def update_collection(
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
         
-        # Check for duplicate names (excluding current collection)
-        if request.name:
-            if any(c.name.lower() == request.name.lower() and c.id != collection_id for c in collections):
-                raise HTTPException(status_code=409, detail="Collection name already exists")
-            collection.name = request.name
+        # Authorization check
+        if company_id and collection.company_id != company_id:
+            raise HTTPException(status_code=403, detail="Not authorized to edit this collection")
         
-        if request.description is not None:
-            collection.description = request.description
+        # Check for duplicate names (excluding current collection in same company)
+        if request_data.name:
+            if any(c.name.lower() == request_data.name.lower() and c.id != collection_id and c.company_id == collection.company_id for c in collections):
+                raise HTTPException(status_code=409, detail="Collection name already exists in your company")
+            collection.name = request_data.name
+        
+        if request_data.description is not None:
+            collection.description = request_data.description
         
         service._save_collections(collections)
         
         # Update collection name in all cameras
-        if request.name:
+        if request_data.name:
             cameras = service._load_cameras()
             for camera in cameras:
                 if camera.collection_id == collection_id:
@@ -595,10 +621,14 @@ async def update_collection(
 @router.delete("/{collection_id}")
 async def delete_collection(
     collection_id: str,
+    request: Request,
     service: EnhancedCameraService = Depends(get_camera_service)
 ):
     """Delete a collection"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id") if current_user.get("role") != "SuperAdmin" else None
+
         # Prevent deletion of default collection
         if collection_id == "default":
             raise HTTPException(status_code=400, detail="Cannot delete the default collection")
@@ -609,6 +639,10 @@ async def delete_collection(
         collection = next((c for c in collections if c.id == collection_id), None)
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
+            
+        # Authorization check
+        if company_id and collection.company_id != company_id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this collection")
         
         # Move all cameras in this collection to default
         cameras = service._load_cameras()

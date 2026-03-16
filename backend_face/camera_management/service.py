@@ -215,12 +215,12 @@ class EnhancedCameraService:
         """Get paginated list of cameras with collections"""
         try:
             cameras = self._load_cameras()
+            collections = self._load_collections()
             
             # Filter by company_id if provided
             if company_id:
                 cameras = [c for c in cameras if c.company_id == company_id]
-            
-            collections = self._load_collections()
+                collections = [c for c in collections if c.company_id == company_id or c.id == "default"]
             
             # Calculate pagination
             total_cameras = len(cameras)

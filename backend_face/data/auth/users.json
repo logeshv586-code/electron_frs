@@ -23,5 +23,31 @@
     "created_at": "2026-02-04T09:24:51.672774+00:00",
     "updated_at": "2026-02-04T09:24:51.672774+00:00",
     "hashed_password": "$2b$12$CeNySot6EK00L.FTN7dwg.hxdE03x6fD3Lt.skqdMyCWTwAxUuw3K"
+  },
+  "loki": {
+    "username": "loki",
+    "hashed_password": "$2b$12$iEIGoHRRudySaEYxOfYKpOb8W2N9qWDVB/HON4OndmbOvudryhkUC",
+    "role": "Admin",
+    "email": "mkkr01486@gmail.com",
+    "is_active": true,
+    "created_by": "eagleai",
+    "created_at": "2024-01-01T00:00:00Z",
+    "assigned_cameras": [],
+    "assigned_menus": [
+      "dashboard",
+      "gallery",
+      "video",
+      "stream-viewer",
+      "settings",
+      "users",
+      "camera",
+      "events",
+      "registration"
+    ],
+    "max_users_limit": 8,
+    "max_cameras_limit": 12,
+    "company_id": "loki",
+    "license_start_date": null,
+    "license_end_date": null
   }
 }

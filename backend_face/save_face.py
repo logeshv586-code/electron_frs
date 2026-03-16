@@ -67,7 +67,7 @@ def _should_save(label: str, min_interval: float) -> bool:
         return False
 
 def _append_log(row: dict):
-    header = ["filename", "label", "timestamp_iso", "saved_path", "confidence", "source"]
+    header = ["filename", "label", "timestamp_iso", "saved_path", "confidence", "source", "company_id"]
     write_header = not LOG_CSV.exists()
     try:
         LOG_CSV.parent.mkdir(parents=True, exist_ok=True)
@@ -314,6 +314,7 @@ def save_face_image(
             "saved_path": univ_path,
             "confidence": confidence if confidence is not None else "",
             "source": source,
+            "company_id": company_id or "default"
         }
         _append_log(log_row)
         
@@ -328,7 +329,8 @@ def save_face_image(
                     "type": "Unknown Person",
                     "time": datetime.now().strftime("%H:%M"),
                     "location": camera_name or "Camera 1",
-                    "image_url": f"/api/captured/image/unknown/{comp}/{cam}/{fname}"
+                    "image_url": f"/api/captured/image/unknown/{comp}/{cam}/{fname}",
+                    "company_id": company_id or "default"
                 }
             else:
                 msg_type = "RECOGNITION"
@@ -336,10 +338,10 @@ def save_face_image(
                     "id": str(uuid.uuid4()),
                     "name": label.title(),
                     "time": datetime.now().strftime("%H:%M"),
-                    "camera": camera_name or "Camera 1",
                     "status": "Recognized",
                     "imgColor": "bg-blue-500",
-                    "image_url": f"/api/captured/image/known/{comp}/{cam}/{label_s}/{fname}"
+                    "image_url": f"/api/captured/image/known/{comp}/{cam}/{label_s}/{fname}",
+                    "company_id": company_id or "default"
                 }
             
             # Since this might be called from a different thread, we use a helper or try/except loop

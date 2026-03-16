@@ -71,10 +71,10 @@
 }
 
 .add-btn {
-  background: var(--primary-color);
+  background: #3b82f6;
   color: white;
   border: none;
-  padding: 7px 14px;
+  padding: 10px 18px;
   border-radius: var(--border-radius);
   cursor: pointer;
   font-weight: 500;
@@ -283,8 +283,8 @@
 }
 
 .header-submit-btn {
-  padding: 6px 14px;
-  border-radius: 6px;
+  padding: 8px 18px;
+  border-radius: 8px;
   border: 1px solid #3b82f6;
   background: #3b82f6;
   color: #fff;
@@ -401,6 +401,16 @@
   font-size: 0.82rem;
   transition: all 0.2s;
   box-sizing: border-box;
+}
+
+.form-group select option {
+  color: #000;
+  background: #fff;
+}
+
+.role-select {
+  color: var(--text-color);
+  background-color: var(--card-bg);
 }
 
 .form-group input:focus,

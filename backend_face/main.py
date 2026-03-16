@@ -394,11 +394,11 @@ async def root():
 # ============= ANALYTICS ENDPOINTS =============
 
 @app.get("/api/analytics/overview", tags=["Analytics"])
-async def get_analytics_overview():
+async def get_analytics_overview(request: Request):
     """Get overall analytics overview"""
     try:
         from event.event_api import filter_faces_logic
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
 
         total_faces = len(all_faces)
         known_faces = sum(1 for f in all_faces if f["type"] == "known")
@@ -421,14 +421,14 @@ async def get_analytics_overview():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/face-detection-trend", tags=["Analytics"])
-async def get_face_detection_trend(days: int = 7):
+async def get_face_detection_trend(request: Request, days: int = 7):
     """Get face detection trends over time"""
     try:
         from event.event_api import filter_faces_logic
         from datetime import datetime, timedelta
         from collections import defaultdict
 
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         cutoff_date = datetime.now() - timedelta(days=days)
         daily_stats = defaultdict(lambda: defaultdict(int))
 
@@ -463,14 +463,14 @@ async def get_face_detection_trend(days: int = 7):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/confidence-distribution", tags=["Analytics"])
-async def get_confidence_distribution():
+async def get_confidence_distribution(request: Request):
     """Get confidence score distribution"""
     try:
         # Confidence is not strictly available in events mapping, returning placeholder distribution
         labels = ['0-0.2', '0.2-0.4', '0.4-0.6', '0.6-0.8', '0.8-1.0']
         
         from event.event_api import filter_faces_logic
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         
         # Simulate confidence distribution based on known/unknown
         data = [0, 0, 0, 0, 0]
@@ -489,13 +489,13 @@ async def get_confidence_distribution():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/person-frequency", tags=["Analytics"])
-async def get_person_frequency(limit: int = 10):
+async def get_person_frequency(request: Request, limit: int = 10):
     """Get most frequently recognized persons"""
     try:
         from event.event_api import filter_faces_logic
         from collections import defaultdict
         
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         person_freq = defaultdict(int)
 
         for face in all_faces:
@@ -515,14 +515,14 @@ async def get_person_frequency(limit: int = 10):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/hourly-activity", tags=["Analytics"])
-async def get_hourly_activity():
+async def get_hourly_activity(request: Request):
     """Get face detection activity by hour of day"""
     try:
         from event.event_api import filter_faces_logic
         from datetime import datetime
         from collections import defaultdict
         
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         hourly_activity = defaultdict(int)
 
         for face in all_faces:
@@ -546,13 +546,13 @@ async def get_hourly_activity():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/camera-activity", tags=["Analytics"])
-async def get_camera_activity():
+async def get_camera_activity(request: Request):
     """Get face detection activity by camera/source"""
     try:
         from event.event_api import filter_faces_logic
         from collections import defaultdict
         
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         camera_activity = defaultdict(int)
 
         for face in all_faces:
@@ -567,20 +567,20 @@ async def get_camera_activity():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/top-persons", tags=["Analytics"])
-async def get_top_persons(limit: int = 5):
+async def get_top_persons(request: Request, limit: int = 5):
     """Get top detected persons (alias for person-frequency)"""
-    return await get_person_frequency(limit)
+    return await get_person_frequency(request, limit)
 
 @app.get("/api/analytics/detections-over-time", tags=["Analytics"])
-async def get_detections_over_time(days: int = 7):
+async def get_detections_over_time(request: Request, days: int = 7):
     """Get detections over time (alias for face-detection-trend)"""
-    return await get_face_detection_trend(days)
+    return await get_face_detection_trend(request, days)
 
 @app.get("/api/analytics/face-types", tags=["Analytics"])
-async def get_face_types():
+async def get_face_types(request: Request):
     """Get distribution of face types (Known vs Unknown)"""
     try:
-        overview = await get_analytics_overview()
+        overview = await get_analytics_overview(request)
         return {
             "labels": ["Known Faces", "Unknown Faces"],
             "data": [overview["known_faces"], overview["unknown_faces"]]
@@ -590,14 +590,14 @@ async def get_face_types():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/persons-list", tags=["Analytics"])
-async def get_persons_list():
+async def get_persons_list(request: Request):
     """Get list of all persons with their profile images and basic stats"""
     try:
         from event.event_api import filter_faces_logic
         from collections import defaultdict
         from datetime import datetime
 
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         persons_data = defaultdict(lambda: {
             "count": 0,
             "avg_confidence": 0.0,

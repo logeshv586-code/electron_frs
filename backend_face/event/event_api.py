@@ -365,102 +365,6 @@ async def filter_faces(
     """Filter faces by name, date range, and camera."""
     return await filter_faces_logic(request, name, from_date, to_date, camera, face_type)
 
-async def filter_faces_logic(
-    request: Optional[Request] = None,
-    name: Optional[str] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    camera: Optional[str] = "all_cameras",
-    face_type: Optional[str] = None
-):
-    current_user = request.scope.get("user", {}) if request else {}
-    # SuperAdmin gets None so process_directory scans ALL companies.
-    # Regular users without a company_id fall back to "default".
-    company_id = current_user.get("company_id")
-    if company_id is None and current_user.get("role") != "SuperAdmin":
-        company_id = "default"
-    
-    name_filter = name.lower().strip() if name and isinstance(name, str) else None
-    from_date_obj = None
-    to_date_obj = None
-    face_type_filter = None
-
-    if face_type:
-        normalized_face_type = face_type.lower().strip()
-        if normalized_face_type not in {"known", "unknown"}:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid face type. Allowed values are 'known' or 'unknown'"
-            )
-        face_type_filter = normalized_face_type
-
-    try:
-        if from_date:
-            from_date_obj = datetime.strptime(from_date, "%Y-%m-%d").date()
-        if to_date:
-            to_date_obj = datetime.strptime(to_date, "%Y-%m-%d").date()
-        if from_date_obj and to_date_obj and from_date_obj > to_date_obj:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid date range: from_date cannot be later than to_date"
-            )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid date format. Please use YYYY-MM-DD format: {exc}"
-        ) from exc
-
-    timestamp_regex = re.compile(r"(\d{8}_\d{6}(?:_\d{3,6})?)")
-
-    def extract_timestamp(face_file: str, img_path: str) -> datetime:
-        match = timestamp_regex.search(face_file)
-        if match:
-            raw = match.group(1)
-            for fmt in ("%Y%m%d_%H%M%S_%f", "%Y%m%d_%H%M%S"):
-                try:
-                    return datetime.strptime(raw, fmt)
-                except ValueError:
-                    continue
-        try:
-            return datetime.fromtimestamp(os.path.getmtime(img_path))
-        except Exception:
-            return datetime.utcnow()
-
-    def resolve_known_metadata(parts: List[str], face_file: str) -> tuple[str, str]:
-        image_name = parts[-1] if parts else face_file
-        if len(parts) >= 3:
-            return parts[1], parts[0]
-        if len(parts) >= 2:
-            person = parts[-2]
-            camera_name = parts[0] if parts[0].lower().startswith("camera_") else "default"
-            return person, camera_name
-        base_name = os.path.splitext(image_name)[0]
-        match = timestamp_regex.search(base_name)
-        if match:
-            person = base_name[:match.start()].rstrip('_') or "Unknown"
-        else:
-            splits = base_name.split('_')
-            person = splits[0] if splits else base_name
-        return person, "default"
-
-    def resolve_unknown_metadata(parts: List[str]) -> str:
-        if len(parts) >= 2:
-            return parts[0]
-        return "default"
-
-    camera_name_map = load_camera_name_map()
-
-    def get_camera_display_name(camera_id: str) -> str:
-        if camera_id in camera_name_map:
-            return camera_name_map[camera_id]
-        if camera_id.lower() in camera_name_map:
-            return camera_name_map[camera_id.lower()]
-        for cam_key, cam_name in camera_name_map.items():
-            if cam_key.lower() == camera_id.lower():
-                return cam_name
-        if camera_id.lower() == "default":
-            return "Default Camera"
-        return camera_id.replace('_', ' ').title()
 
 def process_company_directory(company_dir: str, company_id: str, face_type_filter: Optional[str], from_date_obj: Optional[datetime.date], to_date_obj: Optional[datetime.date], name_filter: Optional[str], camera_filter: Optional[str], camera_name_map: Dict[str, str], assigned_cameras: Optional[List[str]] = None) -> List[Dict]:
     """Helper to process events within a specific company directory."""
@@ -593,15 +497,24 @@ async def filter_faces_logic(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     camera: Optional[str] = "all_cameras",
-    face_type: Optional[str] = None
+    face_type: Optional[str] = None,
+    company_id: Optional[str] = None
 ):
+    # Always resolve current_user from request (needed for assigned_cameras etc.)
     current_user = request.scope.get("user", {}) if request else {}
-    role = current_user.get("role")
-    # SuperAdmin should see all companies
-    if role == "SuperAdmin":
-        company_id = None
-    else:
-        company_id = current_user.get("company_id", "default")
+    assigned_cameras = current_user.get("assigned_cameras")
+
+    if company_id is None:
+        role = current_user.get("role")
+        # SuperAdmin should see all companies
+        if role == "SuperAdmin":
+            company_id = None
+        else:
+            company_id = current_user.get("company_id", "default")
+    
+    # ensure company_id is a string if it's not None
+    if company_id:
+        company_id = str(company_id)
     
     name_filter = name.lower().strip() if name and isinstance(name, str) else None
     from_date_obj = None
@@ -618,22 +531,24 @@ async def filter_faces_logic(
     camera_name_map = load_camera_name_map()
     matching_faces = []
 
-    assigned_cameras = current_user.get("assigned_cameras")
-
     if company_id is None:
-        # SUPERADMIN → scan all company directories
-        if os.path.exists(KNOWN_FACES_DIR):
-            companies = [d for d in os.listdir(KNOWN_FACES_DIR) if os.path.isdir(os.path.join(KNOWN_FACES_DIR, d))]
-            for comp in companies:
-                if comp.startswith("camera_") or comp == "__pycache__":
-                    continue
-                matching_faces.extend(process_company_directory(
-                    os.path.join(KNOWN_FACES_DIR, comp), comp, face_type, from_date_obj, to_date_obj, name_filter, camera, camera_name_map, assigned_cameras
-                ))
-            if "default" not in companies:
-                matching_faces.extend(process_company_directory(
-                    KNOWN_FACES_DIR, "default", face_type, from_date_obj, to_date_obj, name_filter, camera, camera_name_map, assigned_cameras
-                ))
+        # SUPERADMIN → scan all company directories from both known and unknown dirs
+        all_companies = set()
+        for base_dir in [KNOWN_FACES_DIR, UNKNOWN_FACES_DIR]:
+            if os.path.exists(base_dir):
+                for d in os.listdir(base_dir):
+                    if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith("camera_") and d != "__pycache__":
+                        all_companies.add(d)
+        
+        for comp in all_companies:
+            matching_faces.extend(process_company_directory(
+                os.path.join(KNOWN_FACES_DIR, comp), comp, face_type, from_date_obj, to_date_obj, name_filter, camera, camera_name_map, assigned_cameras
+            ))
+        
+        if "default" not in all_companies:
+            matching_faces.extend(process_company_directory(
+                KNOWN_FACES_DIR, "default", face_type, from_date_obj, to_date_obj, name_filter, camera, camera_name_map, assigned_cameras
+            ))
     else:
         # NORMAL TENANT
         matching_faces.extend(process_company_directory(
@@ -1793,9 +1708,15 @@ async def export_employees_pdf(request: Request):
     persons = metadata.get("persons", metadata)
     
     # SaaS Filter
-    if current_user.get("role") != "SuperAdmin":
-        username = current_user.get("username")
-        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
+    role = current_user.get("role")
+    company_id = current_user.get("company_id")
+    
+    if role != "SuperAdmin":
+        if company_id:
+            persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == company_id}
+        else:
+            username = current_user.get("username")
+            persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username or pdata.get("company_id") == "default"}
     
     headers = ["Emp ID", "Name", "Department", "Designation", "Email", "Status"]
     rows = []

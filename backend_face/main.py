@@ -398,6 +398,8 @@ async def get_analytics_overview(request: Request):
     """Get overall analytics overview"""
     try:
         from event.event_api import filter_faces_logic
+        import csv
+        
         all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
 
         total_faces = len(all_faces)
@@ -406,7 +408,35 @@ async def get_analytics_overview(request: Request):
         unique_persons = set(f["name"] for f in all_faces if f["type"] == "known" and f["name"] != "Unknown")
 
         recognition_rate = (known_faces / total_faces * 100) if total_faces > 0 else 0
-        avg_confidence = 0.85 # Default if not available in events
+        
+        avg_confidence = 0.85
+        # Compute real average confidence from capture logs
+        try:
+            current_user = request.scope.get("user", {})
+            user_company_id = current_user.get("company_id")
+            user_role = current_user.get("role")
+            
+            log_csv_path = os.path.join(CAPTURED_FACES_DIR, "capture_log.csv")
+            if os.path.exists(log_csv_path):
+                total_conf = 0.0
+                count_conf = 0
+                with open(log_csv_path, 'r', newline='', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        # RBAC
+                        if user_role != "SuperAdmin" and row.get("company_id") != user_company_id:
+                            continue
+                        conf_str = row.get("confidence", "")
+                        if conf_str:
+                            try:
+                                total_conf += float(conf_conf := float(conf_str))
+                                count_conf += 1
+                            except ValueError:
+                                pass
+                if count_conf > 0:
+                    avg_confidence = total_conf / count_conf
+        except Exception as e:
+            logger.warning(f"Failed to compute avg_confidence from log: {e}")
 
         return {
             "total_faces": total_faces,

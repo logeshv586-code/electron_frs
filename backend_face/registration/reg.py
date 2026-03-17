@@ -887,6 +887,12 @@ async def register_bulk(
         df = pd.read_excel(excel_path)
         if 'name' not in df.columns:
             raise ValueError("Excel file must have a 'name' column")
+            
+        # Validate mandatory fields
+        required_columns = ['Employee Full Name', 'Employee Details', 'Designation', 'Email', 'Phone Number', 'Roles', 'Status', 'Gender']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Excel file is missing required columns: {', '.join(missing_columns)}")
         
         # Clean up the data
         df['name'] = df['name'].str.strip()

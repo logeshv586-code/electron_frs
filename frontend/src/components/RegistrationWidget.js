@@ -40,6 +40,7 @@ const RegistrationWidget = () => {
   const [selectedFolder, setSelectedFolder] = useState('');
   const [imageFilesForBulk, setImageFilesForBulk] = useState([]);
   const excelFileInputRef = useRef(null);
+  const browserFolderInputRef = useRef(null);
 
   // Ensure age is always 18 or above on component mount
   useEffect(() => {
@@ -264,7 +265,36 @@ const RegistrationWidget = () => {
     }
   };
 
+  const handleBrowserFolderSelect = (event) => {
+    const files = Array.from(event.target.files);
+    
+    // Filter only images
+    const validExtensions = ['.jpg', '.jpeg', '.png'];
+    const imageFiles = files.filter(f => {
+      const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
+      return validExtensions.includes(ext);
+    });
+
+    if (imageFiles.length > 0) {
+      setSelectedFolder(`Browser Folder (${imageFiles.length} files)`);
+      setImageFilesForBulk(imageFiles);
+      showMessage(`Folder selected: ${imageFiles.length} image(s) found`, 'success');
+    } else {
+      showMessage('Folder selected but no image files found', 'error');
+      setImageFilesForBulk([]);
+      setSelectedFolder('');
+    }
+  };
+
   const handleFolderSelect = async () => {
+    if (!window.electronAPI) {
+      // Browser fallback
+      if (browserFolderInputRef.current) {
+        browserFolderInputRef.current.click();
+      }
+      return;
+    }
+
     try {
       const result = await window.electronAPI.selectFolder();
       if (result.success && result.folderPath) {
@@ -305,28 +335,64 @@ const RegistrationWidget = () => {
     setMessage('Processing bulk registration...');
 
     try {
-      const excelBuffer = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(new Uint8Array(e.target.result));
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(excelFile);
-      });
+      let result;
+      
+      if (window.electronAPI) {
+        const excelBuffer = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(new Uint8Array(e.target.result));
+          reader.onerror = reject;
+          reader.readAsArrayBuffer(excelFile);
+        });
 
-      const result = await window.electronAPI.registerBulk(
-        Array.from(excelBuffer),
-        imageFilesForBulk
-      );
+        result = await window.electronAPI.registerBulk(
+          Array.from(excelBuffer),
+          imageFilesForBulk
+        );
+      } else {
+        // Browser fallback using FormData
+        const formDataToSend = new FormData();
+        formDataToSend.append('excel_file', excelFile);
+        
+        imageFilesForBulk.forEach(file => {
+          const path = file.webkitRelativePath || file.name;
+          formDataToSend.append('image_files', file, path);
+        });
+
+        const response = await fetch(`${BASE_URL}/api/registration/register/bulk`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          body: formDataToSend,
+        });
+        
+        const data = await response.json();
+        result = {
+          success: response.ok,
+          data: data,
+          error: data.detail || data.message
+        };
+      }
 
       if (result.success) {
-        const successCount = result.data.filter(r => r.status === 'success').length;
-        const totalCount = result.data.length;
-        showMessage(`Bulk registration completed: ${successCount}/${totalCount} successful`, 'success');
+        let successCount = 0;
+        let totalCount = 0;
+        if (Array.isArray(result.data)) {
+          successCount = result.data.filter(r => r.status === 'success').length;
+          totalCount = result.data.length;
+        }
+        
+        showMessage(`Bulk registration completed: ${successCount} successful`, 'success');
 
         setExcelFile(null);
         setSelectedFolder('');
         setImageFilesForBulk([]);
         if (excelFileInputRef.current) {
           excelFileInputRef.current.value = '';
+        }
+        if (browserFolderInputRef.current) {
+          browserFolderInputRef.current.value = '';
         }
       } else {
         showMessage(result.error || 'Bulk registration failed', 'error');
@@ -925,6 +991,16 @@ const RegistrationWidget = () => {
 
                 <div className="bulk-step">
                   <h4>2. Select Data Folder</h4>
+                  <input
+                    ref={browserFolderInputRef}
+                    type="file"
+                    webkitdirectory="true"
+                    directory="true"
+                    onChange={handleBrowserFolderSelect}
+                    style={{ display: 'none' }}
+                    disabled={isLoading}
+                    multiple
+                  />
                   <div
                     className={`file-select-box ${selectedFolder ? 'selected' : ''}`}
                     onClick={handleFolderSelect}
@@ -942,11 +1018,23 @@ const RegistrationWidget = () => {
 
               <div className="bulk-instructions">
                 <h4>Instructions</h4>
-                <ul>
-                  <li>Excel file must have a 'name' column (required)</li>
-                  <li>Optional columns: 'age', 'gender', 'category'</li>
-                  <li>Data folder should contain images named of each person</li>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                  Please ensure your Excel file contains the following mandatory columns:
+                </p>
+                <ul style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px', paddingLeft: '20px' }}>
+                  <li><strong>name</strong> (Matches the image filename)</li>
+                  <li><strong>Employee Full Name</strong></li>
+                  <li><strong>Employee Details</strong></li>
+                  <li><strong>Designation</strong></li>
+                  <li><strong>Email</strong></li>
+                  <li><strong>Phone Number</strong></li>
+                  <li><strong>Roles</strong></li>
+                  <li><strong>Status</strong></li>
+                  <li><strong>Gender</strong></li>
                 </ul>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  <strong>Note:</strong> The selected Data Folder should contain images named identically to the 'name' column for each person. Optional columns: 'age', 'category'.
+                </p>
               </div>
             </div>
 

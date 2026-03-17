@@ -220,7 +220,7 @@ class EnhancedCameraService:
             # Filter by company_id if provided
             if company_id:
                 cameras = [c for c in cameras if c.company_id == company_id]
-                collections = [c for c in collections if c.company_id == company_id or c.id == "default"]
+                collections = [c for c in collections if c.company_id == company_id]
             
             # Calculate pagination
             total_cameras = len(cameras)

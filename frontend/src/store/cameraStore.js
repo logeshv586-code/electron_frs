@@ -261,11 +261,13 @@ export const useCameraStore = create((set, get) => ({
 
   // Collection management
   createCollection: async (name, description = null) => {
+    const { token } = useAuthStore.getState();
     try {
       const response = await fetch(`${API_BASE_URL}/api/collections/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           name,
@@ -292,11 +294,13 @@ export const useCameraStore = create((set, get) => ({
   },
 
   renameCollection: async (collectionId, newName) => {
+    const { token } = useAuthStore.getState();
     try {
       const response = await fetch(`${API_BASE_URL}/api/collections/${collectionId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           name: newName
@@ -322,11 +326,13 @@ export const useCameraStore = create((set, get) => ({
   },
 
   updateCollection: async (collectionId, updates) => {
+    const { token } = useAuthStore.getState();
     try {
       const response = await fetch(`${API_BASE_URL}/api/collections/${collectionId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(updates),
       });
@@ -350,9 +356,13 @@ export const useCameraStore = create((set, get) => ({
   },
 
   deleteCollection: async (collectionId) => {
+    const { token } = useAuthStore.getState();
     try {
       const response = await fetch(`${API_BASE_URL}/api/collections/${collectionId}`, {
         method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
       if (!response.ok) {
@@ -425,6 +435,7 @@ export const useCameraStore = create((set, get) => ({
 
   // Camera activation/deactivation
   activateCamera: async (cameraId) => {
+    const { token } = useAuthStore.getState();
     console.log('activateCamera called with cameraId:', cameraId);
     set({ loading: true, error: null });
     try {
@@ -435,6 +446,7 @@ export const useCameraStore = create((set, get) => ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
       });
 
@@ -477,12 +489,14 @@ export const useCameraStore = create((set, get) => ({
   },
 
   deactivateCamera: async (cameraId) => {
+    const { token } = useAuthStore.getState();
     set({ loading: true, error: null });
     try {
       const response = await fetch(`${API_BASE_URL}/api/collections/cameras/${cameraId}/deactivate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
       });
 

@@ -1192,17 +1192,32 @@ async def get_gallery(request: Request, name: Optional[str] = None, category: Op
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/metadata")
-async def get_metadata():
-    """Get all metadata"""
+async def get_metadata(request: Request):
+    """Get all metadata filtered by company"""
     try:
-        return MetadataManager.load_metadata()
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        metadata = MetadataManager.load_metadata()
+        
+        # Filter persons by company_id
+        if company_id:
+            if "persons" in metadata:
+                metadata["persons"] = {k: v for k, v in metadata["persons"].items() if v.get("company_id") == company_id}
+            else:
+                metadata = {k: v for k, v in metadata.items() if isinstance(v, dict) and v.get("company_id") == company_id}
+                
+        return metadata
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/metadata")
-async def save_metadata(metadata: dict):
-    """Save metadata"""
+async def save_metadata(request: Request, metadata: dict):
+    """Save metadata - Restricted to SuperAdmin as it overwrites everything"""
     try:
+        current_user = request.scope.get("user", {})
+        if current_user.get("role") != "SuperAdmin":
+            raise HTTPException(status_code=403, detail="Only SuperAdmin can overwrite full metadata")
+            
         if MetadataManager.save_metadata(metadata):
             return {"status": "success"}
         raise HTTPException(status_code=500, detail="Failed to save metadata")
@@ -1220,17 +1235,28 @@ async def get_statistics(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/metadata/person/{person_id}")
-async def add_person_metadata(person_id: str, data: dict):
-    """Add a new person to metadata"""
+async def add_person_metadata(request: Request, person_id: str, data: dict):
+    """Add a new person to metadata with company_id scoping"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id") or "default"
+        
         metadata = MetadataManager.load_metadata()
-        metadata.setdefault("persons", {})[person_id] = {
+        person_data = {
             "name": data.get("name", ""),
             "age": data.get("age", ""),
             "gender": data.get("gender", ""),
             "category": data.get("category", ""),
-            "registration_date": datetime.now().isoformat()
+            "company_id": company_id,
+            "registration_date": datetime.now().isoformat(),
+            "created_by": current_user.get("username")
         }
+        
+        if "persons" in metadata:
+            metadata["persons"][person_id] = person_data
+        else:
+            metadata[person_id] = person_data
+            
         if MetadataManager.save_metadata(metadata):
             return {"status": "success"}
         raise HTTPException(status_code=500, detail="Failed to save metadata")
@@ -1238,13 +1264,28 @@ async def add_person_metadata(person_id: str, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/metadata/person/{person_id}")
-async def update_person_metadata(person_id: str, data: dict):
-    """Update a person's metadata"""
+async def update_person_metadata(request: Request, person_id: str, data: dict):
+    """Update a person's metadata with scoping check"""
     try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        
         metadata = MetadataManager.load_metadata()
-        if person_id not in metadata.get("persons", {}):
+        persons_map = metadata.get("persons", metadata)
+        
+        if person_id not in persons_map:
             raise HTTPException(status_code=404, detail="Person not found")
-        metadata["persons"][person_id].update(data)
+            
+        person_info = persons_map[person_id]
+        if company_id and person_info.get("company_id") != company_id:
+            raise HTTPException(status_code=403, detail="Unauthorized to update this person")
+            
+        # Don't allow changing company_id or critical fields via this endpoint
+        data.pop("company_id", None)
+        data.pop("created_by", None)
+        
+        person_info.update(data)
+        
         if MetadataManager.save_metadata(metadata):
             return {"status": "success"}
         raise HTTPException(status_code=500, detail="Failed to save metadata")

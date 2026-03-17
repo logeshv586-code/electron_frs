@@ -1256,26 +1256,6 @@ async def get_weekly_attendance(request: Request):
             result.append({"date": day_str, "day": day.strftime("%a"), "present": 0, "absent": 0, "late": 0, "total": 0})
     return {"weekly": result}
 
-@router.get("/attendance/department-stats")
-async def get_department_stats(request: Request, target_date: Optional[str] = Query(None)):
-    """Get department-wise attendance statistics."""
-    try:
-        data = await get_attendance_logic(request, target_date)
-        records = data.get("attendance", [])
-        
-        dept_stats = {}
-        for r in records:
-            dept = r.get("department", "Unknown")
-            if dept not in dept_stats:
-                dept_stats[dept] = {"present": 0, "total": 0}
-            dept_stats[dept]["total"] += 1
-            if r["status"] == "Present":
-                dept_stats[dept]["present"] += 1
-                
-        return {"departments": dept_stats}
-    except Exception as e:
-        logger.error(f"Error getting department stats: {e}")
-        return {"departments": {}}
 
 @router.get("/attendance/aggregate")
 async def get_attendance_aggregate(

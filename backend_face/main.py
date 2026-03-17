@@ -650,14 +650,14 @@ async def get_persons_list(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/person/{person_name}", tags=["Analytics"])
-async def get_person_analytics(person_name: str):
+async def get_person_analytics(request: Request, person_name: str):
     """Get detailed analytics for a specific person"""
     try:
         from event.event_api import filter_faces_logic
         from datetime import datetime, timedelta
         from collections import defaultdict
 
-        all_faces = await filter_faces_logic(name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
+        all_faces = await filter_faces_logic(request=request, name=None, from_date=None, to_date=None, camera="all_cameras", face_type=None)
         person_faces = [f for f in all_faces if f["name"] == person_name and f["type"] == "known"]
 
         if not person_faces:

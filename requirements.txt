@@ -42,3 +42,4 @@ starlette
 uvloop; platform_system != 'Windows'
 watchfiles
 websockets
+redis

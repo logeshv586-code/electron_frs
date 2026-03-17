@@ -13,6 +13,7 @@ import StreamViewer from './components/StreamViewer';
 import AnimatedLoginPage from './components/auth/AnimatedLoginPage';
 import UserManagement from './components/admin/UserManagement';
 import Settings from './components/admin/Settings';
+import BackupDashboard from './components/admin/BackupDashboard';
 import MainLayout from './components/layout/MainLayout';
 import useAuthStore from './store/authStore';
 import { detectBackendUrl, API_BASE_URL } from './utils/apiConfig';
@@ -123,6 +124,8 @@ const AppContent = () => {
         return <UserManagement />;
       case 'settings':
         return <Settings />;
+      case 'backup':
+        return <BackupDashboard />;
       case 'holiday-calendar':
         return <HolidayCalendar />;
       case 'attendance-report':

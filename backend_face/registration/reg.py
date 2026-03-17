@@ -1298,6 +1298,46 @@ async def update_person_metadata(request: Request, person_id: str, data: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.put("/metadata/person/{person_id}/status")
+async def toggle_person_status(request: Request, person_id: str, payload: dict):
+    """Toggle a person's status between Active and Inactive"""
+    try:
+        current_user = request.scope.get("user", {})
+        company_id = current_user.get("company_id")
+        
+        new_status = payload.get("status")
+        if new_status not in ["Active", "Inactive"]:
+            raise HTTPException(status_code=400, detail="Status must be Active or Inactive")
+
+        metadata = MetadataManager.load_metadata()
+        
+        persons_map = {}
+        if isinstance(metadata, dict):
+            if "persons" in metadata and isinstance(metadata["persons"], dict):
+                persons_map = metadata["persons"]
+            else:
+                persons_map = metadata
+                
+        if person_id not in persons_map:
+            raise HTTPException(status_code=404, detail="Person not found")
+            
+        person_info = persons_map[person_id]
+        if company_id and person_info.get("company_id") != company_id:
+            if person_info.get("company_id") is not None:
+                raise HTTPException(status_code=403, detail="Unauthorized to modify this person")
+                
+        person_info["status"] = new_status
+        person_info["updated_at"] = datetime.now().isoformat()
+        
+        if MetadataManager.save_metadata(metadata):
+            return {"status": "success", "message": f"Status updated to {new_status}"}
+        raise HTTPException(status_code=500, detail="Failed to save metadata")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error toggling status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.delete("/metadata/person/{person_id}")
 async def delete_person_metadata(request: Request, person_id: str):
     """Delete a person from metadata and all associated data"""
@@ -1326,6 +1366,10 @@ async def delete_person_metadata(request: Request, person_id: str):
             # Check if this person belongs to this company
             if person_info.get("company_id") is not None: # only enforce if company_id is set
                 raise HTTPException(status_code=403, detail="Unauthorized to delete this person")
+
+        # Must be inactive to delete
+        if person_info.get("status", "Active") == "Active":
+            raise HTTPException(status_code=400, detail="Person must be 'Inactive' before they can be deleted. Please deactivate first.")
 
         # 1. Delete Gallery folder
         # Try both structured and legacy paths
@@ -1362,6 +1406,20 @@ async def delete_person_metadata(request: Request, person_id: str):
                 cam_pers_dir = os.path.join(known_base, camera, person_id)
                 if os.path.exists(cam_pers_dir):
                     shutil.rmtree(cam_pers_dir, ignore_errors=True)
+                    
+        # 5. Invalidate Embeddings Cache
+        try:
+            cache_file = os.path.join(DATA_DIR, f"embeddings_cache_{company_id or 'default'}.pkl")
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+                logger.info(f"Invalidated embeddings cache for tenant {company_id or 'default'}")
+            
+            # Also clear flat cache just in case
+            flat_cache = os.path.join(DATA_DIR, "embeddings_cache.pkl")
+            if os.path.exists(flat_cache):
+                os.remove(flat_cache)
+        except Exception as cache_err:
+            logger.warning(f"Failed to clear embeddings cache during person deletion: {cache_err}")
                     
         logger.info(f"Deep delete completed for person: {person_id}")
         return {"status": "success", "message": f"Successfully deleted {person_id} and all related biometric data"}

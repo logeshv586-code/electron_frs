@@ -26,7 +26,7 @@ import { API_BASE_URL as BASE_URL, fixImageUrl } from '../utils/apiConfig';
 const API_BASE_URL = `${BASE_URL}/api/events`;
 
 const FaceEvents = () => {
-  const { token } = useAuthStore();
+  const { token, user } = useAuthStore();
   // Filter States
   const [cameras, setCameras] = useState(['All Cameras']);
   const [selectedCamera, setSelectedCamera] = useState('All Cameras');
@@ -429,21 +429,23 @@ const FaceEvents = () => {
                       <td>
                         <div style={{ display: 'flex', gap: '8px' }}>
                           <button className="btn-action" onClick={() => setSelectedEvent(face)}>View</button>
-                          <button 
-                            className="btn-action" 
-                            style={{ 
-                              background: 'transparent', 
-                              color: '#ef4444', 
-                              borderColor: '#ef4444',
-                              padding: '2px 8px'
-                            }} 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteEvent(face);
-                            }}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {user?.role === 'SuperAdmin' && (
+                            <button 
+                              className="btn-action" 
+                              style={{ 
+                                background: 'transparent', 
+                                color: '#ef4444', 
+                                borderColor: '#ef4444',
+                                padding: '2px 8px'
+                              }} 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteEvent(face);
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -496,22 +498,24 @@ const FaceEvents = () => {
                 <p><strong>Type:</strong> <span className={`badge ${selectedEvent.name === 'Unknown' ? 'badge-unknown' : 'badge-known'}`}>{selectedEvent.name === 'Unknown' ? 'Unknown' : 'Known'}</span></p>
               </div>
               <div style={{ padding: '0 20px 20px', display: 'flex', justifyContent: 'flex-end' }}>
-                 <button 
-                    className="btn-action" 
-                    style={{ 
-                       background: '#ef4444', 
-                       color: 'white', 
-                       border: 'none',
-                       display: 'flex',
-                       alignItems: 'center',
-                       gap: '8px',
-                       padding: '8px 16px',
-                       cursor: 'pointer'
-                    }}
-                    onClick={() => handleDeleteEvent(selectedEvent)}
-                 >
-                    <Trash2 size={16} /> Delete Event
-                 </button>
+                 {user?.role === 'SuperAdmin' && (
+                   <button 
+                      className="btn-action" 
+                      style={{ 
+                         background: '#ef4444', 
+                         color: 'white', 
+                         border: 'none',
+                         display: 'flex',
+                         alignItems: 'center',
+                         gap: '8px',
+                         padding: '8px 16px',
+                         cursor: 'pointer'
+                      }}
+                      onClick={() => handleDeleteEvent(selectedEvent)}
+                   >
+                      <Trash2 size={16} /> Delete Event
+                   </button>
+                 )}
               </div>
             </div>
           </div>

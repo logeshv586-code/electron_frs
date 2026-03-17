@@ -149,44 +149,72 @@ async def delete_event(
     request: Request,
     image_path: str = Query(..., description="Path to the event image")
 ):
-    """Delete a specific event image file."""
+    """Delete a specific event image file. SuperAdmin only."""
     try:
         current_user = request.scope.get("user", {})
-        company_id = current_user.get("company_id")
+        role = current_user.get("role")
+        username = current_user.get("username", "unknown")
         
-        # Sanitize path
-        # If it's a URL, extract the path part if possible, but frontend should send relative path
-        clean_path = image_path
+        # Explicit SuperAdmin-only check
+        if role != "SuperAdmin":
+            logger.warning(f"[DELETE-DENIED] User '{username}' (role={role}) attempted to delete event: {image_path}")
+            raise HTTPException(status_code=403, detail="Only SuperAdmin can delete events")
+        
+        # Resolve backend root and captured_faces root
+        backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        captured_faces_root = os.path.abspath(os.path.join(backend_root, "captured_faces"))
+        
+        # Remove query params if any
+        clean_path = image_path.split("?")[0]
+        
+        # Convert URL path to filesystem path
         if clean_path.startswith('/api/captured/image/'):
-            # Convert URL back to filesystem path (best effort)
-             # But it's safer to have frontend send the path it got from the API
-             pass
+            # URL pattern: /api/captured/image/{face_type}/{company_id}/{camera}/{person}/{image_name}
+            # Filesystem:   captured_faces/{face_type}/{company_id}/{camera}/{person}/{image_name}
+            relative = clean_path.replace('/api/captured/image/', '', 1)
+            
+            # Decode URL encoding (%20 -> space)
+            import urllib.parse
+            relative = urllib.parse.unquote(relative)
+            
+            clean_path = os.path.join('captured_faces', relative.replace('/', os.sep))
+            logger.info(f"[DELETE] URL '{image_path}' -> path '{clean_path}'")
         
-        # Check if it's absolute, if not make it relative to BASE_DIR
-        abs_path = os.path.normpath(clean_path)
-        if not os.path.isabs(abs_path):
-            backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Prevent path traversal attacks
+        if '..' in clean_path:
+            raise HTTPException(status_code=403, detail="Forbidden: Path traversal detected")
+        
+        # Resolve to absolute path
+        if not os.path.isabs(clean_path):
             abs_path = os.path.join(backend_root, clean_path)
+        else:
+            abs_path = clean_path
             
         abs_path = os.path.abspath(abs_path)
-        captured_faces_root = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "captured_faces"))
 
         # Safety check: must be inside captured_faces
         if not abs_path.startswith(captured_faces_root):
+            logger.warning(f"[DELETE-BLOCKED] Path '{abs_path}' is outside '{captured_faces_root}'")
             raise HTTPException(status_code=403, detail="Forbidden: Cannot delete files outside captured_faces")
-
-        # Multi-tenancy check
-        if current_user.get("role") != "SuperAdmin":
-            if company_id not in abs_path.replace('\\', '/') and "/default/" not in abs_path.replace('\\', '/'):
-                raise HTTPException(status_code=403, detail="Unauthorized to delete this company's data")
 
         if os.path.exists(abs_path):
             os.remove(abs_path)
-            logger.info(f"Event image deleted: {abs_path}")
+            logger.info(f"[DELETE-OK] SuperAdmin '{username}' deleted event image: {abs_path}")
+            
+            # Clean up empty parent directories (up to captured_faces root)
+            parent = os.path.dirname(abs_path)
+            while parent != captured_faces_root and os.path.isdir(parent):
+                if not os.listdir(parent):
+                    os.rmdir(parent)
+                    logger.info(f"[DELETE-CLEANUP] Removed empty directory: {parent}")
+                    parent = os.path.dirname(parent)
+                else:
+                    break
+            
             return {"status": "success", "message": "Event deleted successfully"}
         else:
-             # Try one more fallback: maybe it's just the filename?
-             raise HTTPException(status_code=404, detail=f"Event file not found at {abs_path}")
+            logger.warning(f"[DELETE-NOTFOUND] File not found: {abs_path}")
+            raise HTTPException(status_code=404, detail=f"Event file not found")
             
     except HTTPException:
         raise

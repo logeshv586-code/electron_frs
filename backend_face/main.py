@@ -63,6 +63,26 @@ app = FastAPI(
 async def startup_event():
     start_license_checker()
     logger.info("License checker background task started")
+    
+    # Start backup scheduler (non-blocking, handles Redis unavailability gracefully)
+    try:
+        from backup.backup_service import RedisBackupService
+        from backup.backup_scheduler import BackupScheduler
+        backup_service = RedisBackupService()
+        scheduler = BackupScheduler(backup_service)
+        scheduler.start()
+        logger.info("✓ Backup scheduler started (monthly backups on 1st)")
+    except Exception as e:
+        logger.warning(f"⚠ Backup scheduler not started: {e}")
+        logger.info("Backup management will work on-demand only (no auto-scheduling)")
+
+    # Start image retention worker
+    try:
+        from image_retention import start_retention_worker
+        start_retention_worker()
+        logger.info("✓ Image retention worker started")
+    except Exception as e:
+        logger.warning(f"⚠ Image retention worker not started: {e}")
 
 # Add RBAC middleware for authentication and authorization
 app.add_middleware(RBACMiddleware)
@@ -155,6 +175,15 @@ def mount_services():
     except Exception as e:
         logger.error(f"✗ Failed to mount WebRTC streaming service: {e}")
         logger.info("Continuing with basic camera service only")
+
+    # Mount backup management service (SuperAdmin only)
+    try:
+        from backup.backup_routes import router as backup_router
+        app.include_router(backup_router, prefix="/api/backup", tags=["Backup"])
+        logger.info("✓ Backup management service mounted")
+    except Exception as e:
+        logger.error(f"✗ Failed to mount backup service: {e}")
+        logger.info("Backup management will be unavailable")
 
     # Mount matching service
     try:

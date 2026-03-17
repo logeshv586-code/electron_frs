@@ -17,7 +17,8 @@ import {
   Settings,
   Palette,
   CalendarDays,
-  CalendarCheck
+  CalendarCheck,
+  Database
 } from 'lucide-react';
 import './MainLayout.css';
 
@@ -85,22 +86,25 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
     { id: 'video', label: 'Video Processing', icon: <Video size={20} /> },
     { id: 'users', label: 'User Management', icon: <Users size={20} /> },
     { id: 'settings', label: 'Settings', icon: <Settings size={20} /> },
+    { id: 'backup', label: 'Backup Mgmt', icon: <Database size={20} /> },
   ];
 
   const visibleTabs = tabs.filter(tab => {
+    const userRole = user?.role ? user.role.toLowerCase() : '';
     if (user?.assigned_menus && user.assigned_menus.length > 0) {
       const normalizedMenus = user.assigned_menus.map(m => {
         if (m === 'cameras') return 'camera';
         if (m === 'admin') return 'users';
+        if (m === 'backupmgmt') return 'backup';
         return m;
       });
-      if (['Admin', 'SuperAdmin'].includes(user?.role) && !normalizedMenus.includes('attendance')) {
+      if (['admin', 'superadmin'].includes(userRole) && !normalizedMenus.includes('attendance')) {
         normalizedMenus.push('attendance');
       }
       return normalizedMenus.includes(tab.id);
     }
-    if (user?.role === 'SuperAdmin') return ['dashboard', 'companies', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
-    if (user?.role === 'Admin') return ['dashboard', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings'].includes(tab.id);
+    if (userRole === 'superadmin') return ['dashboard', 'companies', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup'].includes(tab.id);
+    if (userRole === 'admin') return ['dashboard', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup'].includes(tab.id);
     return ['dashboard'].includes(tab.id);
   });
 

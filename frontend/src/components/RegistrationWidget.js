@@ -231,6 +231,35 @@ const RegistrationWidget = () => {
     }
   };
 
+  const handleToggleStatus = async (personId, currentStatus) => {
+    const newStatus = currentStatus === 'Active' ? 'Inactive' : 'Active';
+    if (!window.confirm(`Are you sure you want to mark this person as ${newStatus}?`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/registration/metadata/person/${personId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+
+      if (response.ok) {
+        showMessage(`Person marked as ${newStatus}`, 'success');
+        fetchEmployees(); // Refresh list
+      } else {
+        const error = await response.json();
+        showMessage(error.detail || 'Failed to update status', 'error');
+      }
+    } catch (err) {
+      console.error('Status override error:', err);
+      showMessage('Failed to connect to server', 'error');
+    }
+  };
+
   const handleDeletePerson = async (personId) => {
     if (!window.confirm(`Are you sure you want to delete this person and all their biometric data? This action cannot be undone.`)) {
       return;

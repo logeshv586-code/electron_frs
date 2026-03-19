@@ -4,7 +4,7 @@ import os
 import shutil
 import re
 import json 
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import logging
 import face_recognition
@@ -14,6 +14,12 @@ from .config import KNOWN_FACES_DIR, UNKNOWN_FACES_DIR
 from auth.storage import get_settings
 from xhtml2pdf import pisa
 from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from fastapi.responses import Response, StreamingResponse
 import matplotlib.pyplot as plt
 import base64
@@ -1042,12 +1048,87 @@ async def export_dashboard_pdf(
         stats = dashboard_data.get("stats", { })
         attendance = dashboard_data.get("attendance", [])
         
-        # 1. Generate Summary Chart
+        # 1. Generate Summary Chart and PDF Buffer
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer, pagesize=A4,
+            topMargin=15*mm, bottomMargin=20*mm,
+            leftMargin=18*mm, rightMargin=18*mm,
+        )
+        pw = A4[0] - 36*mm
+        story = []
+        
+        DARK_BLUE = colors.HexColor("#1A237E")
+        MID_BLUE = colors.HexColor("#283593")
+        ACCENT_BLUE = colors.HexColor("#3949AB")
+        LIGHT_BLUE = colors.HexColor("#F1F5F9")
+        WHITE = colors.white
+        GRID_COLOR = colors.HexColor("#C5CAE9")
+        
+        # 1. Header Banner
+        hdr_table = Table([[rl_para("FACE RECOGNITION SYSTEM", bold=True, size=18, color=WHITE, align=TA_CENTER, leading=24)]], colWidths=[pw])
+        hdr_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), DARK_BLUE),
+            ("TOPPADDING", (0,0), (-1,-1), 12),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 12),
+        ]))
+        story.append(hdr_table)
+        story.append(Spacer(1, 4*mm))
+        
+        # 2. Subheader
+        generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
+        title_text = f"Dashboard Summary Report - {target_date or datetime.now().strftime('%Y-%m-%d')}"
+        sub_table = Table([[
+            rl_para(title_text, bold=True, size=13, color=WHITE),
+            rl_para(f"Generated On: {generated_on}", size=9, color=WHITE, align=TA_RIGHT),
+        ]], colWidths=[pw*0.6, pw*0.4])
+        sub_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), MID_BLUE),
+            ("TOPPADDING", (0,0), (-1,-1), 8),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+            ("LEFTPADDING", (0,0), (-1,-1), 10),
+            ("RIGHTPADDING", (0,0), (-1,-1), 10),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ]))
+        story.append(sub_table)
+        story.append(Spacer(1, 6*mm))
+        
+        # 3. Stats Cards
+        card_w = pw / 3.05
+        cards_data = [
+            [rl_para("TOTAL EMPLOYEES", size=8, color=colors.grey, align=TA_CENTER), 
+             rl_para("PRESENT TODAY", size=8, color=colors.grey, align=TA_CENTER),
+             rl_para("LATE TODAY", size=8, color=colors.grey, align=TA_CENTER)],
+            [rl_para(str(stats.get("total_employees", 0)), bold=True, size=16, align=TA_CENTER),
+             rl_para(str(stats.get("present_today", 0)), bold=True, size=16, color=colors.HexColor("#2E7D32"), align=TA_CENTER),
+             rl_para(str(stats.get("late", 0)), bold=True, size=16, color=colors.HexColor("#F57C00"), align=TA_CENTER)]
+        ]
+        stats_table = Table(cards_data, colWidths=[card_w]*3)
+        stats_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (0,1), LIGHT_BLUE),
+            ("BACKGROUND", (1,0), (1,1), colors.HexColor("#E8F5E9")),
+            ("BACKGROUND", (2,0), (2,1), colors.HexColor("#FFF3E0")),
+            ("BOX", (0,0), (0,1), 2, colors.white),
+            ("BOX", (1,0), (1,1), 2, colors.white),
+            ("BOX", (2,0), (2,1), 2, colors.white),
+            ("TOPPADDING", (0,0), (-1,-1), 8),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ]))
+        story.append(stats_table)
+        story.append(Spacer(1, 8*mm))
+        
+        # 4. Chart
         chart_base64 = generate_summary_chart(
             stats.get("present_today", 0), 
             stats.get("absent", 0), 
             stats.get("late", 0)
         )
+        if chart_base64:
+            chart_data = base64.b64decode(chart_base64)
+            img = RLImage(BytesIO(chart_data), width=100*mm, height=60*mm)
+            story.append(Table([[img]], colWidths=[pw], style=TableStyle([("ALIGN", (0,0), (-1,-1), "CENTER")])))
+            story.append(Spacer(1, 8*mm))
         
         # 2. Prepare headers and rows for attendance table
         headers = ["Name", "Department", "Punch In", "Status"]
@@ -1063,76 +1144,55 @@ async def export_dashboard_pdf(
         generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
         title = f"Dashboard Summary Report - {target_date or datetime.now().strftime('%Y-%m-%d')}"
         
-        # We can add a "Stats Section" to the HTML specifically for dashboard
-        stats_html = f"""
-        <div style="display: table; width: 100%; margin-bottom: 20px;">
-            <div style="display: table-row;">
-                <div style="display: table-cell; width: 33%; padding: 10px; background: #f1f5f9; text-align: center;">
-                    <div style="font-size: 8pt; color: #64748b;">TOTAL EMPLOYEES</div>
-                    <div style="font-size: 14pt; font-weight: bold; color: #1e293b;">{stats.get("total_employees", 0)}</div>
-                </div>
-                <div style="display: table-cell; width: 33%; padding: 10px; background: #ecfdf5; text-align: center; border-left: 10px solid white;">
-                    <div style="font-size: 8pt; color: #059669;">PRESENT TODAY</div>
-                    <div style="font-size: 14pt; font-weight: bold; color: #059669;">{stats.get("present_today", 0)}</div>
-                </div>
-                <div style="display: table-cell; width: 33%; padding: 10px; background: #fff7ed; text-align: center; border-left: 10px solid white;">
-                    <div style="font-size: 8pt; color: #d97706;">LATE TODAY</div>
-                    <div style="font-size: 14pt; font-weight: bold; color: #d97706;">{stats.get("late", 0)}</div>
-                </div>
-            </div>
-        </div>
-        """
-        
-        # Build HTML
-        header_html = "".join([f"<th>{h}</th>" for h in headers])
-        rows_html = "".join(["<tr>" + "".join([f"<td>{cell}</td>" for cell in row]) + "</tr>" for row in rows])
-        
-        html = f"""
-        <html>
-        <head>
-        <style>
-            @page {{ size: a4; margin: 1cm; }}
-            body {{ font-family: 'Helvetica', 'Arial', sans-serif; color: #333; line-height: 1.4; }}
-            .header {{ text-align: center; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 20px; }}
-            .header h1 {{ margin: 0; color: #1e293b; font-size: 18pt; }}
-            .header h2 {{ margin: 5px 0; color: #475569; font-size: 14pt; }}
-            .info {{ margin-bottom: 10px; font-size: 9pt; color: #64748b; }}
-            .chart-section {{ text-align: center; margin-bottom: 20px; }}
-            table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
-            th {{ background-color: #1e293b; color: white; text-align: left; padding: 6px; font-size: 9pt; }}
-            td {{ border-bottom: 1px solid #e2e8f0; padding: 6px; font-size: 8pt; }}
-            tr:nth-child(even) {{ background-color: #f8fafc; }}
-            .footer {{ border-top: 1px solid #cbd5e1; padding-top: 10px; margin-top: 20px; text-align: center; font-size: 8pt; color: #64748b; }}
-        </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>FACE RECOGNITION SYSTEM</h1>
-                <h2>{title}</h2>
-            </div>
-            <div class="info">Generated On: {generated_on}</div>
-            
-            {stats_html}
 
-            <div class="chart-section">
-                <img src="data:image/png;base64,{chart_base64}" style="width: 300px;">
-            </div>
-
-            <h3 style="font-size: 12pt; color: #1e293b; margin-bottom: 10px;">Attendance Highlights</h3>
-            <table>
-                <thead><tr>{header_html}</tr></thead>
-                <tbody>{rows_html}</tbody>
-            </table>
-            
-            <div class="footer">Generated by AI Surveillance System</div>
-        </body>
-        </html>
-        """
+        # 5. Attendance Table
+        story.append(rl_para("RECENT ATTENDANCE HIGHLIGHTS", bold=True, size=11, color=DARK_BLUE))
+        story.append(Spacer(1, 3*mm))
         
-        pdf_bytes = render_pdf(html)
-        if not pdf_bytes:
-            raise HTTPException(status_code=500, detail="Failed to generate PDF")
+        headers = ["Name", "Department", "Punch In", "Status"]
+        formatted_headers = [rl_para(h, bold=True, color=WHITE, size=9, align=TA_CENTER) for h in headers]
+        rows = []
+        for r in attendance[:15]:
+            row = []
+            for h in headers:
+                key = h.lower().replace(" ", "_")
+                text = str(r.get(key, "-"))
+                color = colors.black
+                bold = False
+                align = TA_LEFT
+                
+                if h == "Status":
+                    l_text = text.lower()
+                    if l_text in ["present", "active"]: color = colors.HexColor("#2E7D32"); bold = True; align = TA_CENTER
+                    elif l_text in ["absent", "late", "inactive"]: color = colors.HexColor("#C62828"); bold = True; align = TA_CENTER
+                elif h == "Punch In": 
+                    align = TA_CENTER
+                
+                row.append(rl_para(text, bold=bold, color=color, size=8, align=align))
+            rows.append(row)
             
+        att_table = Table([formatted_headers] + rows, colWidths=[pw*0.3, pw*0.3, pw*0.2, pw*0.2], repeatRows=1)
+        ts = TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), ACCENT_BLUE),
+            ("TOPPADDING", (0,0), (-1,-1), 6),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("GRID", (0,0), (-1,-1), 0.4, GRID_COLOR),
+        ])
+        for i in range(len(rows)):
+            ts.add("BACKGROUND", (0, i+1), (-1, i+1), LIGHT_BLUE if i%2==0 else WHITE)
+        att_table.setStyle(ts)
+        story.append(att_table)
+        
+        # Footer
+        story.append(Spacer(1, 10*mm))
+        story.append(HRFlowable(width="100%", thickness=0.8, color=DARK_BLUE))
+        story.append(Spacer(1, 2*mm))
+        story.append(rl_para("Generated by AI Surveillance System", size=8, color=colors.grey, align=TA_CENTER))
+        
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        
         filename = f"dashboard_summary_{target_date or datetime.now().strftime('%Y-%m-%d')}.pdf"
         return Response(
             content=pdf_bytes,
@@ -1489,6 +1549,119 @@ async def export_attendance(
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
+def rl_para(text, bold=False, size=9, color=colors.black, align=TA_LEFT, leading=None):
+    styles = getSampleStyleSheet()
+    markup = f"<b>{text}</b>" if bold else text
+    kw = dict(fontSize=size, textColor=color, alignment=align)
+    if leading:
+        kw["leading"] = leading
+    return Paragraph(markup, ParagraphStyle("_", parent=styles["Normal"], **kw))
+
+def generate_reportlab_pdf(title: str, subtitle: str, headers: List[str], rows: List[List[Any]], col_widths: List[float], total_label: str = "Total Records"):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=15*mm, bottomMargin=20*mm,
+        leftMargin=18*mm, rightMargin=18*mm,
+    )
+    
+    pw = A4[0] - 36*mm
+    story = []
+    
+    DARK_BLUE = colors.HexColor("#1A237E")
+    MID_BLUE = colors.HexColor("#283593")
+    ACCENT_BLUE = colors.HexColor("#3949AB")
+    LIGHT_BLUE = colors.HexColor("#F1F5F9")
+    WHITE = colors.white
+    GRID_COLOR = colors.HexColor("#C5CAE9")
+    
+    # Header Banner
+    hdr_table = Table([[rl_para("FACE RECOGNITION SYSTEM", bold=True, size=18, color=WHITE, align=TA_CENTER, leading=24)]], colWidths=[pw])
+    hdr_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), DARK_BLUE),
+        ("TOPPADDING", (0,0), (-1,-1), 12),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 12),
+    ]))
+    story.append(hdr_table)
+    story.append(Spacer(1, 4*mm))
+    
+    # Subheader
+    generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
+    sub_table = Table([[
+        rl_para(title, bold=True, size=13, color=WHITE),
+        rl_para(f"Generated On: {generated_on}", size=9, color=WHITE, align=TA_RIGHT),
+    ]], colWidths=[pw*0.6, pw*0.4])
+    sub_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), MID_BLUE),
+        ("TOPPADDING", (0,0), (-1,-1), 8),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+        ("LEFTPADDING", (0,0), (-1,-1), 10),
+        ("RIGHTPADDING", (0,0), (-1,-1), 10),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+    ]))
+    story.append(sub_table)
+    story.append(Spacer(1, 2*mm))
+    if subtitle:
+        story.append(rl_para(subtitle, size=10, color=colors.grey, align=TA_LEFT))
+    story.append(Spacer(1, 4*mm))
+    
+    # Table
+    header_row = [rl_para(h, bold=True, color=WHITE, size=9, align=TA_CENTER) for h in headers]
+    formatted_rows = []
+    for row in rows:
+        formatted_row = []
+        for i, cell in enumerate(row):
+            text = str(cell)
+            color = colors.black
+            bold = False
+            align = TA_LEFT
+            
+            # Special handling for Status
+            l_text = text.lower()
+            if l_text == "active" or l_text == "present":
+                color = colors.HexColor("#2E7D32")
+                bold = True
+                align = TA_CENTER
+            elif l_text == "inactive" or l_text == "absent" or l_text == "late":
+                color = colors.HexColor("#C62828")
+                bold = True
+                align = TA_CENTER
+            
+            # Center certain columns
+            if i < len(headers) and headers[i] in ["Emp ID", "S.No", "Status", "Late"]:
+                align = TA_CENTER
+                
+            formatted_row.append(rl_para(text, bold=bold, color=color, size=8, align=align))
+        formatted_rows.append(formatted_row)
+        
+    main_table = Table([header_row] + formatted_rows, colWidths=col_widths, repeatRows=1)
+    ts = TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), ACCENT_BLUE),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("GRID", (0,0), (-1,-1), 0.4, GRID_COLOR),
+        ("LINEBELOW", (0,0), (-1,0), 1.2, DARK_BLUE),
+    ])
+    for i in range(len(formatted_rows)):
+        bg = LIGHT_BLUE if i % 2 == 0 else WHITE
+        ts.add("BACKGROUND", (0, i+1), (-1, i+1), bg)
+    main_table.setStyle(ts)
+    story.append(main_table)
+    story.append(Spacer(1, 5*mm))
+    
+    # Summary
+    story.append(rl_para(f"{total_label}: {len(rows)}", bold=True, size=10, color=DARK_BLUE, align=TA_RIGHT))
+    story.append(Spacer(1, 8*mm))
+    
+    # Footer
+    story.append(HRFlowable(width="100%", thickness=0.8, color=DARK_BLUE))
+    story.append(Spacer(1, 2*mm))
+    story.append(rl_para("Generated by AI Surveillance System", size=8, color=colors.grey, align=TA_CENTER))
+    
+    doc.build(story)
+    return buffer.getvalue()
+
 def render_pdf(html_content: str) -> bytes:
     """Helper to convert HTML to PDF bytes using xhtml2pdf."""
     result = BytesIO()
@@ -1671,7 +1844,9 @@ async def export_attendance_pdf(
     data = await get_attendance_logic(request, target_date)
     records = data.get("attendance", [])
     
-    headers = ["S.No", "Emp ID", "Name", "Department", "Designation", "Status", "Punch In", "Punch Out", "Working Hours", "Late"]
+    pw = A4[0] - 36*mm
+    headers = ["S.No", "Emp ID", "Name", "Dept", "Desig", "Status", "In", "Out", "Hrs", "Late"]
+    col_widths = [pw*0.06, pw*0.10, pw*0.15, pw*0.12, pw*0.12, pw*0.12, pw*0.09, pw*0.09, pw*0.08, pw*0.07]
     rows = []
     for r in records:
         rows.append([
@@ -1687,20 +1862,16 @@ async def export_attendance_pdf(
             "Yes" if r.get("is_late") else "No"
         ])
     
-    generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
+    subtitle = f"Report Date: {target_date or datetime.now().strftime('%Y-%m-%d')}"
+    pdf_bytes = generate_reportlab_pdf(
+        "Daily Attendance Report",
+        subtitle,
+        headers,
+        rows,
+        col_widths,
+        total_label="Total Attendance Records"
+    )
     
-    # Generate chart
-    present = sum(1 for r in records if r.get("status") == "Present")
-    absent = len(records) - present
-    late = sum(1 for r in records if r.get("is_late", False))
-    chart_base64 = generate_summary_chart(present, absent, late)
-    
-    html = get_base_html_template("Daily Attendance Report", generated_on, headers, rows, len(records), chart_base64)
-    
-    pdf_bytes = render_pdf(html)
-    if not pdf_bytes:
-        raise HTTPException(status_code=500, detail="Failed to generate PDF")
-        
     filename = f"attendance_report_{target_date or datetime.now().strftime('%Y-%m-%d')}.pdf"
     return Response(
         content=pdf_bytes,
@@ -1726,7 +1897,9 @@ async def export_employees_pdf(request: Request):
             username = current_user.get("username")
             persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username or pdata.get("company_id") == "default"}
     
+    pw = A4[0] - 36*mm
     headers = ["Emp ID", "Name", "Department", "Designation", "Email", "Status"]
+    col_widths = [pw*0.12, pw*0.18, pw*0.15, pw*0.20, pw*0.25, pw*0.10]
     rows = []
     for pid, pdata in persons.items():
         if not isinstance(pdata, dict) or 'name' not in pdata:
@@ -1740,13 +1913,14 @@ async def export_employees_pdf(request: Request):
             pdata.get("status", "Active")
         ])
     
-    generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
-    html = get_base_html_template("Employee Registration Report", generated_on, headers, rows, len(persons))
+    pdf_bytes = generate_reportlab_pdf(
+        "Employee Registration Report",
+        "",
+        headers,
+        rows,
+        col_widths
+    )
     
-    pdf_bytes = render_pdf(html)
-    if not pdf_bytes:
-        raise HTTPException(status_code=500, detail="Failed to generate PDF")
-        
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1764,7 +1938,9 @@ async def export_attendance_pdf_aggregate(
         data = await get_attendance_aggregate(request, start_date, end_date)
         records = data.get("aggregate", [])
         
-        headers = ["S.No", "Emp ID", "Name", "Department", "Designation", "Total Present", "Total Absent", "Total Late", "Total Hrs", "Avg Hrs/Day"]
+        pw = A4[0] - 36*mm
+        headers = ["S.No", "Emp ID", "Name", "Dept", "Desig", "Pres", "Abs", "Late", "Hrs", "Avg"]
+        col_widths = [pw*0.06, pw*0.10, pw*0.15, pw*0.12, pw*0.12, pw*0.09, pw*0.09, pw*0.07, pw*0.10, pw*0.10]
         rows = []
         for r in records:
             rows.append([
@@ -1780,21 +1956,16 @@ async def export_attendance_pdf_aggregate(
                 r.get("avg_working_hours", "-")
             ])
         
-        generated_on = datetime.now().strftime("%d %b %Y %I:%M %p")
-        title = f"Attendance Aggregate Report ({start_date} to {end_date})"
+        subtitle = f"Period: {start_date} to {end_date}"
+        pdf_bytes = generate_reportlab_pdf(
+            "Attendance Aggregate Report",
+            subtitle,
+            headers,
+            rows,
+            col_widths,
+            total_label="Total Employees"
+        )
         
-        # Calculate summary for aggregate chart
-        total_p = sum(r.get("total_present", 0) for r in records)
-        total_a = sum(r.get("total_absent", 0) for r in records)
-        total_l = sum(r.get("total_late", 0) for r in records)
-        chart_base64 = generate_summary_chart(total_p, total_a, total_l)
-        
-        html = get_base_html_template(title, generated_on, headers, rows, len(records), chart_base64)
-        
-        pdf_bytes = render_pdf(html)
-        if not pdf_bytes:
-            raise HTTPException(status_code=500, detail="Failed to generate PDF")
-            
         filename = f"attendance_aggregate_{start_date}_to_{end_date}.pdf"
         return Response(
             content=pdf_bytes,

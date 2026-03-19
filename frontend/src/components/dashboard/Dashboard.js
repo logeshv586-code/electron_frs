@@ -6,7 +6,7 @@ import {
 import {
   Users, UserCheck, UserX, Clock, Camera, AlertTriangle,
   Activity, Search, Filter, Download, ChevronLeft, ChevronRight,
-  ShieldAlert, Server, Cpu, HardDrive, Maximize2, Loader2
+  ShieldAlert, Server, Cpu, HardDrive, Maximize2, Loader2, FileText
 } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
 import FaceRecognitionAnalytics from './FaceRecognitionAnalytics';
@@ -264,13 +264,46 @@ export default function Dashboard({ setActiveTab }) {
             <div className="w-2 h-2 bg-green-900/300 rounded-full animate-pulse"></div>
             <span className="text-xs font-semibold text-green-400">System Online</span>
           </div>
-          <button
-            onClick={loadData}
-            className="p-2 transition rounded-lg shadow-sm border"
-            style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}
-          >
-            <Activity size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportCSV}
+              className="flex items-center gap-2 px-3 py-1.5 transition rounded-lg shadow-sm border text-xs font-semibold"
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}
+              title="Export attendance as CSV"
+            >
+              <Download size={16} /> Export CSV
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const response = await fetch(`${API_BASE_URL}/api/events/export/dashboard-pdf`, {
+                    headers: { 'Authorization': `Bearer ${useAuthStore.getState().token}` }
+                  });
+                  if (!response.ok) throw new Error('Failed to generate PDF');
+                  const blob = await response.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `dashboard_report_${new Date().toISOString().split('T')[0]}.pdf`;
+                  a.click();
+                } catch (err) {
+                  console.error("Dashboard PDF Export Error", err);
+                }
+              }}
+              className="flex items-center gap-2 px-3 py-1.5 transition rounded-lg shadow-sm border text-xs font-semibold"
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}
+              title="Export dashboard as premium PDF"
+            >
+              <FileText size={16} /> Export PDF
+            </button>
+            <button
+              onClick={loadData}
+              className="p-2 transition rounded-lg shadow-sm border"
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)' }}
+            >
+              <Activity size={20} />
+            </button>
+          </div>
         </div>
       </div>
 

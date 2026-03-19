@@ -250,7 +250,7 @@ const UserManagement = () => {
             className="export-btn-pdf"
             onClick={async () => {
               try {
-                const response = await fetch(`${API_BASE_URL}/api/events/export/employees-pdf`, {
+                const response = await fetch(`${API_BASE_URL}/api/events/export/users-pdf`, {
                   headers: { 'Authorization': `Bearer ${token}` }
                 });
                 if (!response.ok) throw new Error('Failed to export PDF');
@@ -258,7 +258,7 @@ const UserManagement = () => {
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'employee_registration_report.pdf';
+                a.download = 'user_management_report.pdf';
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);

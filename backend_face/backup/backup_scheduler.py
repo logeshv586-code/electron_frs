@@ -120,21 +120,27 @@ class BackupScheduler:
         # Schedule next run
         self._schedule_next()
 
-    def enforce_retention(self) -> Dict[str, Any]:
+    def enforce_retention(self, tenant_id: Optional[str] = None, retention_days: Optional[int] = None) -> Dict[str, Any]:
         """
         Delete backups older than retention_days.
         Always keeps at least max_backups files.
+        If tenant_id is provided, only enforces retention on backups containing that tenant.
         
         Returns:
             dict with details of deleted files
         """
         backups = self.backup_service.list_backups()
         
+        if tenant_id:
+            backups = [b for b in backups if tenant_id in b.get("tenant_ids", [])]
+
+        active_retention_days = retention_days if retention_days is not None else self.retention_days
+
         if len(backups) <= self.max_backups:
             logger.info(f"[RETENTION] Only {len(backups)} backups exist, keeping all (minimum: {self.max_backups})")
-            return {"deleted": [], "kept": len(backups)}
+            return {"deleted": [], "deleted_count": 0, "kept": len(backups)}
 
-        cutoff_date = datetime.utcnow() - timedelta(days=self.retention_days)
+        cutoff_date = datetime.utcnow() - timedelta(days=active_retention_days)
         deleted = []
 
         # Sort by date (oldest first) and keep the newest max_backups
@@ -161,7 +167,7 @@ class BackupScheduler:
             "deleted": deleted,
             "deleted_count": len(deleted),
             "kept": len(backups) - len(deleted),
-            "retention_days": self.retention_days,
+            "retention_days": active_retention_days,
             "cutoff_date": cutoff_date.isoformat()
         }
 

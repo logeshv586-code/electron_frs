@@ -98,8 +98,9 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
         if (m === 'backupmgmt') return 'backup';
         return m;
       });
-      if (['admin', 'superadmin'].includes(userRole) && !normalizedMenus.includes('attendance')) {
-        normalizedMenus.push('attendance');
+      if (['admin', 'superadmin'].includes(userRole)) {
+        if (!normalizedMenus.includes('attendance')) normalizedMenus.push('attendance');
+        if (!normalizedMenus.includes('backup')) normalizedMenus.push('backup');
       }
       return normalizedMenus.includes(tab.id);
     }

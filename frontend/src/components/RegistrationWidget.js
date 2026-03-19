@@ -601,35 +601,50 @@ const RegistrationWidget = () => {
                           <td style={{ padding: '12px' }}>{emp.email || '-'}</td>
                           <td style={{ padding: '12px' }}>{emp.phone || '-'}</td>
                           <td style={{ padding: '12px' }}>
-                            <span style={{
-                              padding: '4px 8px',
-                              borderRadius: '12px',
-                              fontSize: '0.8rem',
-                              backgroundColor: emp.status === 'Active' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                              color: emp.status === 'Active' ? '#10b981' : '#ef4444'
-                            }}>
+                            <span 
+                              onClick={() => {
+                                if (currentUser?.role?.toLowerCase() === 'superadmin' || currentUser?.role?.toLowerCase() === 'admin') {
+                                  handleToggleStatus(emp.id, emp.status || 'Active');
+                                }
+                              }}
+                              title={(currentUser?.role?.toLowerCase() === 'superadmin' || currentUser?.role?.toLowerCase() === 'admin') ? 'Click to toggle status' : ''}
+                              style={{
+                                padding: '4px 8px',
+                                borderRadius: '12px',
+                                fontSize: '0.8rem',
+                                backgroundColor: (emp.status || 'Active') === 'Active' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                color: (emp.status || 'Active') === 'Active' ? '#10b981' : '#ef4444',
+                                cursor: (currentUser?.role?.toLowerCase() === 'superadmin' || currentUser?.role?.toLowerCase() === 'admin') ? 'pointer' : 'default',
+                                display: 'inline-block',
+                                transition: 'opacity 0.2s'
+                              }}
+                              onMouseOver={(e) => { if (currentUser?.role?.toLowerCase() === 'superadmin' || currentUser?.role?.toLowerCase() === 'admin') e.currentTarget.style.opacity = 0.8; }}
+                              onMouseOut={(e) => { if (currentUser?.role?.toLowerCase() === 'superadmin' || currentUser?.role?.toLowerCase() === 'admin') e.currentTarget.style.opacity = 1; }}
+                            >
                               {emp.status || 'Active'}
                             </span>
                           </td>
                           <td style={{ padding: '12px', textAlign: 'center' }}>
-                            <button 
-                              onClick={() => handleDeletePerson(emp.id)}
-                              className="btn-icon-delete"
-                              title="Delete Person"
-                              style={{
-                                background: 'transparent',
-                                border: 'none',
-                                color: '#ef4444',
-                                cursor: 'pointer',
-                                padding: '4px',
-                                borderRadius: '4px',
-                                transition: 'background 0.2s'
-                              }}
-                              onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
-                              onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {(emp.status && emp.status !== 'Active') && (currentUser?.role?.toLowerCase() === 'superadmin' || currentUser?.role?.toLowerCase() === 'admin') && (
+                              <button 
+                                onClick={() => handleDeletePerson(emp.id)}
+                                className="btn-icon-delete"
+                                title="Delete Person"
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#ef4444',
+                                  cursor: 'pointer',
+                                  padding: '4px',
+                                  borderRadius: '4px',
+                                  transition: 'background 0.2s'
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                                onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -766,20 +781,7 @@ const RegistrationWidget = () => {
                 </div>
               </div>
 
-              <div className="form-row-split">
-                <div className="form-group">
-                  <label>Status</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => handleInputChange('status', e.target.value)}
-                    disabled={isLoading}
-                    className="select-clean"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
+              {/* Status field removed from Registration Form as it defaults to Active */}
 
               <div className="form-row-split">
                 <div className="form-group age-group">

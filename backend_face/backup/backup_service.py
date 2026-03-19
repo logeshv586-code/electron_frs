@@ -78,9 +78,9 @@ class RedisBackupService:
 
     # ─────────────────────────── BACKUP ───────────────────────────
 
-    def create_backup(self, compress: bool = False) -> Dict[str, Any]:
+    def create_backup(self, compress: bool = False, tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Create a full backup of all tenant data from Redis.
+        Create a full backup of all tenant data from Redis (or specific tenant if provided).
         Uses SCAN to avoid blocking.
         
         Returns:
@@ -109,8 +109,9 @@ class RedisBackupService:
         cursor = 0
 
         # Use SCAN to iterate all tenant:* keys
+        match_pattern = f"tenant:{tenant_id}:*" if tenant_id else "tenant:*"
         while True:
-            cursor, keys = r.scan(cursor=cursor, match="tenant:*", count=500)
+            cursor, keys = r.scan(cursor=cursor, match=match_pattern, count=500)
             
             for key_bytes in keys:
                 key = self._safe_decode(key_bytes)
@@ -173,12 +174,13 @@ class RedisBackupService:
         backup_data["metadata"]["duration_seconds"] = (end_time - start_time).total_seconds()
 
         # Generate filename (never overwrite existing)
-        filename = f"backup_{datetime.now().strftime('%Y_%m')}.json"
+        prefix = f"backup_{tenant_id}_" if tenant_id else "backup_"
+        filename = f"{prefix}{datetime.now().strftime('%Y_%m')}.json"
         filepath = os.path.join(self.backup_dir, filename)
         
         # If file exists, add timestamp suffix
         if os.path.exists(filepath):
-            filename = f"backup_{datetime.now().strftime('%Y_%m_%d_%H%M%S')}.json"
+            filename = f"{prefix}{datetime.now().strftime('%Y_%m_%d_%H%M%S')}.json"
             filepath = os.path.join(self.backup_dir, filename)
 
         # Write to file

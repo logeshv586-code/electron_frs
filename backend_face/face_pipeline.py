@@ -485,7 +485,9 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
 
     h, w = new_h, new_w
     logger.debug(f"[FACE_PIPE] Processing frame: {w}x{h}, stream_id={stream_id}")
+    start_time = time.time()
     faces = current_face_app.get(scaled_frame)
+    det_time = time.time() - start_time
     if len(faces) > 0:
         logger.info(f"[FACE_PIPE] Found {len(faces)} faces in raw detection")
     detections: List[Dict[str, Any]] = []
@@ -630,10 +632,16 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
                         conf = det_conf
                 else:
                     # Not enough consensus — treat as unknown to prevent false positives
+                    logger.warning(f"[UNKNOWN] Low consensus | best={best_name} | votes={name_votes.get(best_name, 0)}/{required_votes} | det_conf={det_conf:.2f}")
                     conf = det_conf
             else:
                 # Recognition failed - keep current name (persisted known name or "Unknown")
+                if det_conf > 0.4:
+                    logger.info(f"[UNKNOWN] No match | det_conf={det_conf:.2f}")
                 conf = det_conf
+
+        if name != "Unknown":
+            logger.info(f"[MATCH] {name} | confidence={conf:.2f} | det_conf={det_conf:.2f}")
 
         # Reconstruction of missing logic: Person tracking, quality check, and saving decision
         face_quality = _calculate_face_quality(face_crop_bgr, det_conf)
@@ -746,6 +754,17 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
             save_thread.start()
 
         detections.append({"name": name, "conf": conf, "bbox": (x1, y1, x2, y2)})
+
+    # Calculate and log structured metrics
+    end_time = time.time()
+    recognized_users = [d["name"] for d in detections if d["name"] != "Unknown"]
+    metrics = {
+        "frame_time": end_time - start_time,
+        "faces_detected": len(faces),
+        "faces_recognized": len(recognized_users),
+        "stream_id": stream_id
+    }
+    logger.info(f"[METRICS] {metrics}")
 
     # DETECTION PERSISTENCE: Return all currently active tracks for UI rendering
     if stream_id:

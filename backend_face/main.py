@@ -278,7 +278,7 @@ app.mount("/static/captured", StaticFiles(directory=CAPTURED_FACES_DIR), name="c
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
-@app.get("/api/gallery/image/{company_id}/{person_name}/{image_name:path}")
+@app.api_route("/api/gallery/image/{company_id}/{person_name}/{image_name:path}", methods=["GET", "HEAD"])
 async def get_gallery_image(request: Request, company_id: str, person_name: str, image_name: str):
     """Serve gallery images with proper error handling and fallback"""
     try:
@@ -301,6 +301,13 @@ async def get_gallery_image(request: Request, company_id: str, person_name: str,
 
         # Construct the image path
         image_path = os.path.join(GALLERY_DIR, company_id, person_name, image_name)
+
+        # Fallback: If company_id is "default" and folder doesn't exist, check gallery root
+        if not os.path.exists(image_path) and company_id == "default":
+            root_fallback = os.path.join(GALLERY_DIR, person_name, image_name)
+            if os.path.exists(root_fallback):
+                image_path = root_fallback
+                logger.info(f"Using root gallery fallback for {person_name}/{image_name}")
 
         # Check if file exists and is within the gallery directory
         if not os.path.exists(image_path):
@@ -334,12 +341,12 @@ async def get_gallery_image(request: Request, company_id: str, person_name: str,
         logger.error(f"Error serving gallery image {person_name}/{image_name}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/api/gallery/image/{person_name}/{image_name:path}")
+@app.api_route("/api/gallery/image/{person_name}/{image_name:path}", methods=["GET", "HEAD"])
 async def get_gallery_image_legacy(request: Request, person_name: str, image_name: str):
     """Fallback for 2-parameter legacy gallery URLs"""
     return await get_gallery_image(request, "default", person_name, image_name)
 
-@app.get("/api/captured/image/{face_type}/{company_id}/{camera}/{person}/{image_name}")
+@app.api_route("/api/captured/image/{face_type}/{company_id}/{camera}/{person}/{image_name}", methods=["GET", "HEAD"])
 async def get_captured_image(request: Request, face_type: str, company_id: str, camera: str, person: str, image_name: str):
     """Serve captured face images with proper error handling"""
     try:

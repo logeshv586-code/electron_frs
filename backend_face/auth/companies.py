@@ -65,6 +65,11 @@ def delete_company(company_id: str) -> bool:
     if company_id not in companies:
         return False
     
-    del companies[company_id]
-    save_companies(companies)
+    # Cascading Cleanup (Users, Tokens, Settings, Physical Data)
+    from .cleanup_utils import cleanup_company_data
+    cleanup_company_data(company_id)
+    
+    if company_id in companies: # Re-check in case cleanup modified it or just to be safe
+        del companies[company_id]
+        save_companies(companies)
     return True

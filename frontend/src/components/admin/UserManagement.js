@@ -1,8 +1,46 @@
 import React, { useState, useEffect } from 'react';
 import useAuthStore from '../../store/authStore';
 import { API_BASE_URL } from '../../utils/apiConfig';
-import { Users, UserPlus, Edit2, Trash2, X, Shield, Search, Check, FileText } from 'lucide-react';
+import { Users, UserPlus, Edit2, Trash2, X, Shield, Search, Check, FileText, ChevronDown } from 'lucide-react';
 import './UserManagement.css';
+
+const CustomDropdown = ({ options, value, onChange, placeholder = 'Select...', openUp = false }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedOption = options.find(o => o.value === value);
+
+  useEffect(() => {
+    const handleClickOutside = () => setIsOpen(false);
+    if (isOpen) {
+      document.addEventListener('click', handleClickOutside);
+    }
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [isOpen]);
+
+  return (
+    <div className="custom-dropdown-container" onClick={(e) => e.stopPropagation()}>
+      <div className={`custom-dropdown-header ${isOpen ? 'active' : ''}`} onClick={() => setIsOpen(!isOpen)}>
+        <span>{selectedOption ? selectedOption.label : placeholder}</span>
+        <ChevronDown size={18} className={`arrow ${isOpen ? 'rotated' : ''}`} />
+      </div>
+      {isOpen && (
+        <div className={`custom-dropdown-list ${openUp ? 'open-up' : ''}`}>
+          {options.map(option => (
+            <div 
+              key={option.value} 
+              className={`custom-dropdown-item ${value === option.value ? 'selected' : ''}`}
+              onClick={() => {
+                onChange({ target: { name: '', value: option.value } }); // Adapt for existing handleInputChange
+                setIsOpen(false);
+              }}
+            >
+              {option.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const UserManagement = () => {
   const [users, setUsers] = useState([]);
@@ -392,15 +430,20 @@ const UserManagement = () => {
                     <div className="form-row">
                       <div className="form-group">
                         <label>ROLE</label>
-                        <select name="role" value={formData.role} onChange={(e) => {
-                          handleInputChange(e);
-                          if (e.target.value !== 'Admin') {
-                            setFormData(prev => ({ ...prev, company_name: '', company_id: '' }));
-                          }
-                        }} disabled={isEditing}>
-                          {currentUser.role === 'SuperAdmin' && <option value="Admin">Admin</option>}
-                          <option value="Supervisor">Supervisor</option>
-                        </select>
+                        <CustomDropdown
+                          value={formData.role}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setFormData(prev => ({ ...prev, role: val }));
+                            if (val !== 'Admin') {
+                              setFormData(prev => ({ ...prev, company_name: '', company_id: '' }));
+                            }
+                          }}
+                          options={[
+                            ...(currentUser.role === 'SuperAdmin' ? [{ value: 'Admin', label: 'Admin' }] : []),
+                            { value: 'Supervisor', label: 'Supervisor' }
+                          ]}
+                        />
                       </div>
                       <div className="form-group">
                         <label>EMAIL (FOR NOTIFICATIONS)</label>
@@ -475,11 +518,16 @@ const UserManagement = () => {
                         <div className="form-row" style={{ gridTemplateColumns: formData.license_duration === 'custom' ? '1fr 1fr 1fr' : 'repeat(2, 1fr)' }}>
                           <div className="form-group">
                             <label>LICENCE DURATION</label>
-                            <select name="license_duration" value={formData.license_duration} onChange={handleLicenseDurationChange}>
-                              <option value="1y">1 Year</option>
-                              <option value="2y">2 Years</option>
-                              <option value="custom">Custom Range</option>
-                            </select>
+                            <CustomDropdown
+                              openUp={true}
+                              value={formData.license_duration}
+                              onChange={(e) => handleLicenseDurationChange(e)}
+                              options={[
+                                { value: '1y', label: '1 Year' },
+                                { value: '2y', label: '2 Years' },
+                                { value: 'custom', label: 'Custom Range' }
+                              ]}
+                            />
                           </div>
                           {formData.license_duration === 'custom' && (
                             <>

@@ -450,40 +450,51 @@
 }
 
 .permission-card:hover {
-  background: #1e2238;
-  border-color: #3a4060;
-  border-left-color: #4b5580;
+  background: var(--bg-hover);
+  border-color: var(--primary-color);
+  border-left-color: var(--primary-hover);
 }
 
 .permission-card.selected {
-  background: rgba(59, 130, 246, 0.08);
-  border-color: rgba(59, 130, 246, 0.3);
-  border-left-color: #3b82f6;
+  background: rgba(var(--primary-rgb), 0.15);
+  border-color: var(--primary-color);
+  border-left-color: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(var(--primary-rgb), 0.1);
 }
 
 .custom-checkbox {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  background: #2a2f42;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-color);
+  border-radius: 5px;
   display: flex;
   align-items: center;
   justify-content: center;
+  background: var(--bg-input);
   flex-shrink: 0;
-  transition: all 0.2s;
-  border: 1px solid transparent;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.permission-card:hover .custom-checkbox {
+  border-color: var(--primary-color);
 }
 
 .permission-card.selected .custom-checkbox {
-  background: #3b82f6;
-  border-color: #3b82f6;
+  background: var(--primary-gradient);
+  border-color: var(--primary-color);
+  box-shadow: 0 0 10px rgba(var(--primary-rgb), 0.3);
 }
 
 .permission-card span {
   font-size: 0.72rem;
   font-weight: 600;
-  color: #c5c9d6;
+  color: var(--text-secondary);
   letter-spacing: 0.02em;
+  transition: color 0.2s ease;
+}
+
+.permission-card:hover span {
+  color: var(--text-primary);
 }
 
 .permission-card.selected span {

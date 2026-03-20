@@ -670,10 +670,9 @@ class FaceProcessor:
                         all_augmented_images.extend(person_augmented)
 
                         # Create gallery directory and copy first image
-                        if company_id:
-                            gallery_dir = os.path.join(GALLERY_DIR, company_id, safe_name)
-                        else:
-                            gallery_dir = os.path.join(GALLERY_DIR, safe_name)
+                        # Ensure company_id is never None or empty for directory structure
+                        effective_cid = company_id if company_id and str(company_id).strip() else "default"
+                        gallery_dir = os.path.join(GALLERY_DIR, effective_cid, safe_name)
                         os.makedirs(gallery_dir, exist_ok=True)
                         shutil.copy2(
                             os.path.join(output_dir, "1.jpg"),
@@ -755,6 +754,10 @@ async def register_single(
         current_user = request.scope.get("user", {})
         creator = current_user.get("username", "system")
         company_id = current_user.get("company_id")
+        
+        # Ensure company_id is never None or empty for directory structure
+        if not company_id or not str(company_id).strip():
+            company_id = "default"
 
         if is_face_already_registered(rgb_face, company_id=company_id):
             raise HTTPException(
@@ -762,20 +765,12 @@ async def register_single(
                 detail="This face is already registered in the system."
             )
 
-        # Get creator and company from scope
-        current_user = request.scope.get("user", {})
-        creator = current_user.get("username", "system")
-        company_id = current_user.get("company_id")
-
         # Get unique name and create directories
         unique_name = get_unique_name(name.lower(), company_id=company_id)
-        person_dir = os.path.join(DATA_DIR, company_id or "default", unique_name)
+        person_dir = os.path.join(DATA_DIR, company_id, unique_name)
         
         # Multi-tenant gallery structure
-        if company_id:
-            gallery_dir = os.path.join(GALLERY_DIR, company_id, unique_name)
-        else:
-            gallery_dir = os.path.join(GALLERY_DIR, unique_name)
+        gallery_dir = os.path.join(GALLERY_DIR, company_id, unique_name)
             
         os.makedirs(gallery_dir, exist_ok=True)
 
@@ -1190,7 +1185,9 @@ async def get_gallery(request: Request, name: Optional[str] = None, category: Op
             processed_data[person_id]['image_filename'] = image_filename
             
             # Construct tenant-aware image URL
-            url_company_id = company_id or "default"
+            # Use the person's own company_id if available, otherwise fallback to the requester's or "default"
+            person_company_id = person_data.get('company_id')
+            url_company_id = person_company_id or company_id or "default"
             processed_data[person_id]['image_url'] = f"/api/gallery/image/{url_company_id}/{person_id}/{image_filename}"
 
         return processed_data

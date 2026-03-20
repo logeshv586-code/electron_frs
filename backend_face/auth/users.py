@@ -64,6 +64,10 @@ def delete_user(username: str) -> bool:
     if username not in users:
         return False
     
+    # Cascading Cleanup
+    from .cleanup_utils import cleanup_user_tokens
+    cleanup_user_tokens(username)
+    
     del users[username]
     save_users(users)
     return True

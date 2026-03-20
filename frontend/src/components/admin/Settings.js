@@ -10,10 +10,50 @@ import {
   Zap,
   Target,
   Maximize,
-  Shield
+  Shield,
+  ChevronDown
 } from 'lucide-react';
 import { API_BASE_URL } from '../../utils/apiConfig';
 import './Settings.css';
+
+const CustomDropdown = ({ options, value, onChange, placeholder = 'Select...', openUp = false }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedOption = options.find(o => o.value === value);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = () => setIsOpen(false);
+    if (isOpen) {
+      document.addEventListener('click', handleClickOutside);
+    }
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [isOpen]);
+
+  return (
+    <div className="custom-dropdown-container" onClick={(e) => e.stopPropagation()}>
+      <div className={`custom-dropdown-header ${isOpen ? 'active' : ''}`} onClick={() => setIsOpen(!isOpen)}>
+        <span>{selectedOption ? selectedOption.label : placeholder}</span>
+        <ChevronDown size={18} className={`arrow ${isOpen ? 'rotated' : ''}`} />
+      </div>
+      {isOpen && (
+        <div className={`custom-dropdown-list ${openUp ? 'open-up' : ''}`}>
+          {options.map(option => (
+            <div 
+              key={option.value} 
+              className={`custom-dropdown-item ${value === option.value ? 'selected' : ''}`}
+              onClick={() => {
+                onChange({ target: { value: option.value } });
+                setIsOpen(false);
+              }}
+            >
+              {option.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const Settings = () => {
   const { user } = useAuthStore(); // Removed 'token' from here as it's now fetched from localStorage
@@ -262,16 +302,14 @@ const Settings = () => {
             <p className="section-desc">Select which organization's settings you want to manage. Leave as "System Default" for global settings.</p>
             <div className="form-group" style={{ maxWidth: '400px' }}>
               <label>Organization / Company</label>
-              <select 
-                value={selectedCompanyId} 
+              <CustomDropdown
+                value={selectedCompanyId}
                 onChange={(e) => setSelectedCompanyId(e.target.value)}
-                className="settings-select"
-              >
-                <option value="">System Default (Global)</option>
-                {companies.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: 'System Default (Global)' },
+                  ...companies.map(c => ({ value: c.id, label: `${c.name} (${c.id})` }))
+                ]}
+              />
             </div>
           </div>
         )}

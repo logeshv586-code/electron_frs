@@ -293,7 +293,7 @@ const FaceGallery = () => {
                 <PersonCard
                   key={personId}
                   name={personData.name}
-                  photoPath={personData.image_url ? `${API_BASE_URL}${personData.image_url}` : `${API_BASE_URL}/api/gallery/image/${currentUser?.company_id || 'default'}/${personId}/${imageFilename}`}
+                   photoPath={personData.image_url ? `${API_BASE_URL}${personData.image_url}` : `${API_BASE_URL}/api/gallery/image/${personData.company_id || 'default'}/${personId}/${imageFilename}`}
                   details={{
                     age: (personData.age_range && personData.age_range !== 'N/A') ? personData.age_range : personData.age,
                     gender: personData.gender,

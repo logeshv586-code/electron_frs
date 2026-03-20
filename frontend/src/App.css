@@ -1013,3 +1013,94 @@ textarea {
   font-weight: bold;
   margin-left: 2px;
 }
+
+/* Global Custom Dropdown Styles */
+.custom-dropdown-container {
+  position: relative;
+  width: 100%;
+}
+
+.custom-dropdown-header {
+  height: 42px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.custom-dropdown-header:hover {
+  border-color: var(--primary-color);
+  background-color: var(--bg-hover);
+}
+
+.custom-dropdown-header.active {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
+}
+
+.custom-dropdown-header .arrow {
+  color: var(--text-muted);
+  transition: transform 0.3s ease;
+}
+
+.custom-dropdown-header .arrow.rotated {
+  transform: rotate(180deg);
+  color: var(--primary-color);
+}
+
+.custom-dropdown-list {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow-xl);
+  z-index: 1000; /* High z-index for modals */
+  max-height: 250px;
+  overflow-y: auto;
+  animation: dropdownSlideUp 0.2s ease-out;
+}
+
+.custom-dropdown-list.open-up {
+  top: auto;
+  bottom: calc(100% + 5px);
+  animation: dropdownSlideDown 0.2s ease-out;
+}
+
+.custom-dropdown-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+
+.custom-dropdown-item:hover {
+  background-color: rgba(var(--primary-rgb), 0.1);
+  color: var(--primary-color);
+}
+
+.custom-dropdown-item.selected {
+  background-color: var(--primary-color);
+  color: white;
+  font-weight: 600;
+}
+
+@keyframes dropdownSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dropdownSlideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

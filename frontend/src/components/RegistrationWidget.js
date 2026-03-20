@@ -589,7 +589,7 @@ const RegistrationWidget = () => {
                           <td style={{ padding: '12px' }}>{emp.emp_id || '-'}</td>
                           <td style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <img
-                              src={emp.image_url ? `${BASE_URL}${emp.image_url}` : `${BASE_URL}/api/gallery/image/${currentUser?.company_id || 'default'}/${emp.name}/${emp.image_filename || 'original.jpg'}`}
+                              src={emp.image_url ? `${BASE_URL}${emp.image_url}` : `${BASE_URL}/api/gallery/image/${emp.company_id || 'default'}/${emp.name}/${emp.image_filename || 'original.jpg'}`}
                               alt={emp.name}
                               style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover' }}
                               onError={(e) => { e.target.style.display = 'none'; }}

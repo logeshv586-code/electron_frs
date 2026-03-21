@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import face_recognition
@@ -48,37 +48,57 @@ class FaceMatchingService:
         self.gallery_images: List[GalleryImage] = []
         self.load_gallery()
 
-    def load_gallery(self):
-        """Load all gallery images and their encodings"""
-        logger.info("Loading gallery images...")
+    def load_gallery(self, company_id: Optional[str] = None):
+        """Load gallery images and their encodings, optionally scoped by company"""
+        logger.info(f"Loading gallery images for company: {company_id or 'all'}...")
         self.gallery_images = []
 
         if not os.path.exists(DATA_DIR):
             logger.warning(f"Data directory not found: {DATA_DIR}")
             return
 
-        for person_name in os.listdir(DATA_DIR):
-            person_dir = os.path.join(DATA_DIR, person_name)
-            if not os.path.isdir(person_dir):
-                continue
+        # Multi-tenant structure: data/gallery/{company_id}/{person_name}
+        gallery_root = os.path.join(DATA_DIR, "gallery")
+        
+        if company_id:
+            search_paths = [os.path.join(gallery_root, company_id)]
+        else:
+            # Load from all companies if no ID provided (SuperAdmin view)
+            if os.path.exists(gallery_root):
+                search_paths = [os.path.join(gallery_root, d) for d in os.listdir(gallery_root) 
+                               if os.path.isdir(os.path.join(gallery_root, d))]
+            else:
+                search_paths = []
 
-            for img_file in os.listdir(person_dir):
-                if not img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
+        for company_path in search_paths:
+            if not os.path.exists(company_path):
+                continue
+            
+            # Extracts company_id from path for metadata if needed
+            current_cid = os.path.basename(company_path)
+
+            for person_name in os.listdir(company_path):
+                person_dir = os.path.join(company_path, person_name)
+                if not os.path.isdir(person_dir):
                     continue
 
-                image_path = os.path.join(person_dir, img_file)
-                try:
-                    # Load and encode face
-                    image = face_recognition.load_image_file(image_path)
-                    encodings = face_recognition.face_encodings(image)
-                    
-                    if encodings:
-                        self.gallery_images.append(
-                            GalleryImage(person_name, encodings[0], image_path)
-                        )
-                        logger.debug(f"Loaded face encoding for {person_name} from {img_file}")
-                except Exception as e:
-                    logger.error(f"Error processing gallery image {image_path}: {e}")
+                for img_file in os.listdir(person_dir):
+                    if not img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                        continue
+
+                    image_path = os.path.join(person_dir, img_file)
+                    try:
+                        # Load and encode face
+                        image = face_recognition.load_image_file(image_path)
+                        encodings = face_recognition.face_encodings(image)
+                        
+                        if encodings:
+                            self.gallery_images.append(
+                                GalleryImage(person_name, encodings[0], image_path)
+                            )
+                            logger.debug(f"Loaded face encoding for {person_name} (Company: {current_cid}) from {img_file}")
+                    except Exception as e:
+                        logger.error(f"Error processing gallery image {image_path}: {e}")
 
         logger.info(f"Loaded {len(self.gallery_images)} gallery images")
 
@@ -198,15 +218,27 @@ face_service = FaceMatchingService()
 
 @app.post("/api/match/one-to-many")
 async def match_face_to_gallery(
+    request: Request,
     probe: UploadFile = File(...),
     min_confidence: float = Query(0.6, ge=0.0, le=1.0),
-    max_results: int = Query(10, ge=1, le=100)
+    max_results: int = Query(10, ge=1, le=100),
+    company_id: Optional[str] = Query(None)
 ):
     """
     Match a probe face against the gallery of known faces.
     Returns multiple matches above the confidence threshold.
     """
     try:
+        # Resolve company_id from query or RBAC user
+        if not company_id:
+            current_user = request.scope.get("user", {})
+            if isinstance(current_user, dict):
+                company_id = current_user.get("company_id")
+        
+        # Reload gallery specifically for this company if requested (or all if SuperAdmin)
+        # Note: In a high-traffic system, we'd cache these per-company.
+        face_service.load_gallery(company_id=company_id)
+        
         start_time = datetime.now()
 
         # Read and process probe image

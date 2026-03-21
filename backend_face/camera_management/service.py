@@ -271,8 +271,8 @@ class EnhancedCameraService:
                 existing_stream = stream_manager.get_camera_stream(camera_id)
                 if not existing_stream:
                     # Start new stream
-                    stream_id = stream_manager.start_stream(camera_id, camera.rtsp_url)
-                    logger.info(f"Started stream {stream_id} for activated camera {camera_id}")
+                    stream_id = stream_manager.start_stream(camera_id, camera.rtsp_url, camera.name, company_id=camera.company_id)
+                    logger.info(f"Started stream {stream_id} for activated camera {camera_id} (Company: {camera.company_id})")
                 else:
                     logger.info(f"Stream already exists for camera {camera_id}: {existing_stream}")
             except Exception as stream_error:

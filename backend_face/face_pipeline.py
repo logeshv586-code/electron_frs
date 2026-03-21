@@ -184,14 +184,12 @@ def init(data_dir: str, ctx: int = -1, det_size: Tuple[int, int] = (640, 640), u
     except Exception as e:
         raise ImportError("Cannot import load_known_faces from fr1.py") from e
 
-    known_encodings, known_names = load_known_faces(data_dir)
-    
     with embedding_lock:
-        # WARNING: _global embeddings contain all companies' faces.
-        # Only used when company_id cannot be determined (SuperAdmin/legacy streams).
+        # NOTICE: _global embeddings are now empty by default to ensure strict isolation.
+        # This prevents unnamed streams from matching against the "default" company faces.
         company_embeddings["_global"] = {
-            "encodings": known_encodings,
-            "names": known_names,
+            "encodings": [],
+            "names": [],
             "last_loaded": time.time()
         }
 
@@ -442,10 +440,13 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
     
     # Load embeddings for this company
     if company_id:
-        embeddings = load_company_embeddings(company_id)
+        embeddings = load_company_embeddings(str(company_id))
     else:
+        # Strict Isolation: No company_id means no known faces to match against.
+        # This ensures cameras from one tenant cannot recognize faces from others (or 'default').
         with embedding_lock:
             embeddings = company_embeddings.get("_global", {"encodings": [], "names": []})
+            
     current_known_encodings = embeddings.get("encodings", [])
     current_known_names = embeddings.get("names", [])
     

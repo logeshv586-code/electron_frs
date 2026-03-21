@@ -539,13 +539,19 @@ async def filter_faces_logic(
     current_user = request.scope.get("user", {}) if request else {}
     assigned_cameras = current_user.get("assigned_cameras")
 
+    user_role = current_user.get("role")
+    user_company_id = current_user.get("company_id", "default")
+
     if company_id is None:
-        role = current_user.get("role")
-        # SuperAdmin should see all companies
-        if role == "SuperAdmin":
+        if user_role == "SuperAdmin":
             company_id = None
         else:
-            company_id = current_user.get("company_id", "default")
+            company_id = user_company_id
+    else:
+        # Security: Only SuperAdmins can filter by companies other than their own
+        if user_role != "SuperAdmin" and str(company_id) != str(user_company_id):
+            logger.warning(f"Unauthorized company filter attempt: User {current_user.get('id')} tried to access {company_id}")
+            company_id = user_company_id
     
     # ensure company_id is a string if it's not None
     if company_id:
@@ -607,7 +613,17 @@ async def match_face(request: Request, image: UploadFile = File(...)):
     try:
         current_user = request.scope.get("user", {})
         role = current_user.get("role")
-        company_id = current_user.get("company_id", "default")
+        user_company_id = current_user.get("company_id", "default")
+        
+        # SuperAdmin can optionally pass a company_id via query (if we add it)
+        # For now, we take from request context or use 'all' for SuperAdmin
+        company_id = request.query_params.get("company_id")
+        
+        if role != "SuperAdmin" or not company_id:
+            if role != "SuperAdmin":
+                company_id = user_company_id
+            else:
+                company_id = None # Scan all for SuperAdmin if not specified
         
         # Read and process the uploaded image
         contents = await image.read()
@@ -631,14 +647,18 @@ async def match_face(request: Request, image: UploadFile = File(...)):
         
         # Determine paths to scan
         scan_paths = []
-        if role == "SuperAdmin":
+        if role == "SuperAdmin" and not company_id:
+            # SUPERADMIN: Default to scanning all if no company_id provided
             scan_paths.append(KNOWN_FACES_DIR)
         else:
-            company_path = os.path.join(KNOWN_FACES_DIR, company_id)
+            # Use the resolved company_id (either from user token or SuperAdmin choice)
+            cid = company_id or user_company_id
+            company_path = os.path.join(KNOWN_FACES_DIR, cid)
             if os.path.exists(company_path):
                 scan_paths.append(company_path)
-            # Fallback for default
-            if company_id == "default" and KNOWN_FACES_DIR not in scan_paths:
+            
+            # Legacy fallback: only if the resolved company is 'default'
+            if cid == "default" and KNOWN_FACES_DIR not in scan_paths:
                 scan_paths.append(KNOWN_FACES_DIR)
 
         # Walk through directories

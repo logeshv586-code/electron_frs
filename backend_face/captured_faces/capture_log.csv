@@ -1,0 +1,6 @@
+filename,label,timestamp_iso,saved_path,confidence,source,company_id
+unknown_20260321_120746_186744.jpg,unknown,2026-03-21T12:07:46.188775,captured_faces/unknown/default/unknown/unknown_20260321_120746_186744.jpg,0.6842571496963501,stream,default
+unknown_20260321_120824_199550.jpg,unknown,2026-03-21T12:08:24.202146,captured_faces/unknown/default/unknown/unknown_20260321_120824_199550.jpg,0.8036676645278931,stream,default
+unknown_20260321_120840_276935.jpg,unknown,2026-03-21T12:08:40.278659,captured_faces/unknown/default/unknown/unknown_20260321_120840_276935.jpg,0.7941632866859436,stream,default
+logesh_20260321_120853_383534.jpg,logesh,2026-03-21T12:08:53.500741,captured_faces/known/default/unknown/logesh/logesh_20260321_120853_383534.jpg,0.6531244758593064,stream,default
+logesh_20260321_120903_032636.jpg,logesh,2026-03-21T12:09:03.053133,captured_faces/known/default/unknown/logesh/logesh_20260321_120903_032636.jpg,0.6196576832798529,stream,default

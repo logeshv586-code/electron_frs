@@ -14,6 +14,9 @@ CAPTURED_FACES_DIR = BACKEND_DIR / "captured_faces"
 DB_PATH = DATA_DIR / "attendance.db"
 CAMERAS_FILE = DATA_DIR / "cameras.json"
 CAMERA_ASSIGNMENTS_FILE = AUTH_DATA_DIR / "camera_assignments.json"
+METADATA_FILE = DATA_DIR / "metadata.json"
+GALLERY_DIR = DATA_DIR / "gallery"
+EMBEDDINGS_CACHE_FILE = DATA_DIR / "embeddings_cache.pkl"
 
 def cleanup_user_tokens(username: str):
     """Remove all active tokens for a specific user."""
@@ -110,5 +113,59 @@ def cleanup_company_data(company_id: str):
             logger.info(f"Deleted {deleted_rows} attendance records for company {company_id}")
         except Exception as e:
             logger.error(f"Failed to clear database records: {e}")
+            
+    # 7. Clean up person metadata (metadata.json)
+    if METADATA_FILE.exists():
+        try:
+            metadata = load_json(METADATA_FILE, {})
+            # Persons can be at top level or nested in "persons"
+            original_len = len(metadata)
+            
+            # Helper to filter persons
+            def filter_persons(p_dict):
+                return {k: v for k, v in p_dict.items() if v.get("company_id") != company_id}
+
+            # Filter top-level persons
+            new_metadata = {k: v for k, v in metadata.items() if k == "persons" or (isinstance(v, dict) and v.get("company_id") != company_id)}
+            
+            # Filter nested "persons" if exists
+            if "persons" in metadata and isinstance(metadata["persons"], dict):
+                new_metadata["persons"] = filter_persons(metadata["persons"])
+            
+            # Additional cleanup for orphaned entries at top level (matching created_by if missing company_id)
+            for k in list(new_metadata.keys()):
+                if k == "persons": continue
+                v = new_metadata[k]
+                if isinstance(v, dict) and v.get("created_by") in users_to_delete:
+                    del new_metadata[k]
+                    
+            if "persons" in new_metadata and isinstance(new_metadata["persons"], dict):
+                for k in list(new_metadata["persons"].keys()):
+                    v = new_metadata["persons"][k]
+                    if v.get("created_by") in users_to_delete:
+                        del new_metadata["persons"][k]
+
+            # Only write if changed
+            atomic_write_json(METADATA_FILE, new_metadata)
+            logger.info(f"Cleaned up person metadata for company {company_id}")
+        except Exception as e:
+            logger.error(f"Failed to clean up metadata.json: {e}")
+
+    # 8. Clean up company gallery
+    comp_gallery_dir = GALLERY_DIR / company_id
+    if comp_gallery_dir.exists() and comp_gallery_dir.is_dir():
+        try:
+            shutil.rmtree(comp_gallery_dir)
+            logger.info(f"Deleted gallery folder for company {company_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete company gallery folder: {e}")
+
+    # 9. Clear embeddings cache to force rebuild
+    if EMBEDDINGS_CACHE_FILE.exists():
+        try:
+            EMBEDDINGS_CACHE_FILE.unlink()
+            logger.info(f"Cleared embeddings cache for cascading update")
+        except Exception as e:
+            logger.error(f"Failed to clear embeddings cache: {e}")
 
     logger.info(f"Cascading cleanup finished for company: {company_id}")

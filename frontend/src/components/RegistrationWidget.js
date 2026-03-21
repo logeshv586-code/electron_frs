@@ -19,9 +19,9 @@ const RegistrationWidget = () => {
     name: '',
     email: '',
     phone: '',
-    role: '',
     department: '',
     designation: '',
+    category: 'Employee',
     status: 'Active',
     age: '18',
     gender: ''
@@ -137,9 +137,9 @@ const RegistrationWidget = () => {
       name: '',
       email: '',
       phone: '',
-      role: '',
       department: '',
       designation: '',
+      category: 'Employee',
       status: 'Active',
       age: '18',
       gender: ''
@@ -174,6 +174,22 @@ const RegistrationWidget = () => {
       return;
     }
 
+    if (!formData.email.trim() || !formData.email.trim().toLowerCase().endsWith('@gmail.com')) {
+      showMessage('A valid @gmail.com email is required', 'error');
+      return;
+    }
+
+    const cleanPhone = formData.phone.trim().replace(/\D/g, '');
+    if (cleanPhone.length !== 10) {
+      showMessage('Phone number must be exactly 10 digits', 'error');
+      return;
+    }
+
+    if (!formData.category) {
+      showMessage('Please select a Category', 'error');
+      return;
+    }
+
     // Validate age if provided
     if (formData.age.trim()) {
       const ageNum = parseInt(formData.age.trim(), 10);
@@ -195,9 +211,9 @@ const RegistrationWidget = () => {
       formDataToSend.append('name', formData.name.trim());
       formDataToSend.append('email', formData.email.trim());
       formDataToSend.append('phone', formData.phone.trim());
-      formDataToSend.append('role', formData.role.trim());
       formDataToSend.append('department', formData.department.trim());
       formDataToSend.append('designation', formData.designation.trim());
+      formDataToSend.append('category', formData.category);
       formDataToSend.append('status', formData.status.trim());
       formDataToSend.append('age', autoDetectAge ? '' : (formData.age || ''));
       formDataToSend.append('gender', formData.gender);
@@ -744,12 +760,12 @@ const RegistrationWidget = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Email</label>
+                  <label>Email <span className="required">*</span></label>
                   <input
                     type="email"
                     value={formData.email}
                     onChange={(e) => handleInputChange('email', e.target.value)}
-                    placeholder="e.g. john@company.com"
+                    placeholder="example@gmail.com"
                     disabled={isLoading}
                     className="input-clean"
                   />
@@ -758,26 +774,31 @@ const RegistrationWidget = () => {
 
               <div className="form-row-split">
                 <div className="form-group">
-                  <label>Phone</label>
+                  <label>Phone <span className="required">*</span></label>
                   <input
                     type="text"
                     value={formData.phone}
                     onChange={(e) => handleInputChange('phone', e.target.value)}
-                    placeholder="e.g. 1234567890"
+                    placeholder="10 digit number"
                     disabled={isLoading}
                     className="input-clean"
                   />
                 </div>
                 <div className="form-group">
-                  <label>Role</label>
-                  <input
-                    type="text"
-                    value={formData.role}
-                    onChange={(e) => handleInputChange('role', e.target.value)}
-                    placeholder="e.g. Staff"
+                  <label>Category <span className="required">*</span></label>
+                  <select
+                    value={formData.category}
+                    onChange={(e) => handleInputChange('category', e.target.value)}
                     disabled={isLoading}
-                    className="input-clean"
-                  />
+                    className="select-clean"
+                  >
+                    <option value="Employee">Employee</option>
+                    <option value="Visitor">Visitor</option>
+                    <option value="Criminal">Criminal</option>
+                    <option value="Offender">Offender</option>
+                    <option value="VIP">VIP</option>
+                    <option value="Staff">Staff</option>
+                  </select>
                 </div>
               </div>
 

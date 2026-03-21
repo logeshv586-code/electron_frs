@@ -703,18 +703,19 @@ async def register_single(
     request: Request,
     image: UploadFile = File(...),
     name: str = Form(...),
-    age: str | None = Form(None),
-    gender: str | None = Form(None),
     emp_id: str | None = Form(None),
-    email: str | None = Form(None),
-    phone: str | None = Form(None),
-    role: str | None = Form(None),
-    department: str | None = Form(None),
-    designation: str | None = Form(None),
-    joining_date: str | None = Form(None),
-    status: str | None = Form(None)
+    email: str = Form(""),
+    phone: str = Form(""),
+    role: str = Form("User"),
+    department: str = Form(""),
+    designation: str = Form(""),
+    joining_date: str = Form(""),
+    status: str = Form("Active"),
+    age: str = Form(""),
+    gender: str = Form(""),
+    category: str = Form("Employee")
 ):
-    """Register a single person with face image"""
+    """Register a single person with an image"""
     print(f"--- Registration Request ---")
     print(f"Name: {name!r}")
     print(f"Emp ID: {emp_id!r}")
@@ -827,6 +828,7 @@ async def register_single(
             "status": status.strip() if status else "Active",
             "age": str(final_age_val) if isinstance(final_age_val, int) else "N/A",
             "gender": final_gender,
+            "category": category.strip() if category else "Employee",
             "registration_date": registration_time,
             "gallery_path": os.path.relpath(gallery_dir, BASE_DIR).replace('\\', '/'),
             "photo_path": os.path.relpath(original_path, BASE_DIR).replace('\\', '/'),

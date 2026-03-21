@@ -13,5 +13,27 @@
         "predicted_gender": "Male",
         "status": "Active",
         "updated_at": "2026-03-19T13:54:52.697371"
+    },
+    "ram": {
+        "name": "ram",
+        "emp_id": "101",
+        "email": "101",
+        "phone": "2358764765",
+        "role": "senior",
+        "department": "it",
+        "designation": "software",
+        "joining_date": "",
+        "status": "Active",
+        "age": "26",
+        "gender": "Male",
+        "registration_date": "2026-03-21T12:41:01.351887",
+        "gallery_path": "data/gallery/loki/ram",
+        "photo_path": "data/gallery/loki/ram/1.jpg",
+        "age_range": "23-28",
+        "age_source": "ai",
+        "predicted_age": 26,
+        "predicted_gender": "Male",
+        "created_by": "loki",
+        "company_id": "loki"
     }
 }

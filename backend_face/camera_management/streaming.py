@@ -40,6 +40,10 @@ class CameraStreamManager:
         self.frame_buffers: Dict[str, deque] = {}  # Buffer of raw frames for best capture
         self.max_frame_buffer_size = 20  # Optimized for Tesla T4: More frames = better sharpness selection
         
+        # Lock for thread-safe detection updates
+        self.detections_lock = threading.Lock()
+        self.latest_detections: Dict[str, List] = {}
+        
         # Set FFmpeg environment variables to suppress H.264 error messages and handle errors better
         os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|strict;experimental|err_detect;ignore_err'
         # Suppress FFmpeg stderr output for H.264 errors (they're handled gracefully)

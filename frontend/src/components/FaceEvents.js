@@ -15,7 +15,8 @@ import {
   Camera,
   ChevronDown,
   Trash2,
-  Clock as ClockIcon
+  Clock as ClockIcon,
+  RotateCw
 } from 'lucide-react';
 import FaceCard from './FaceCard';
 import "react-datepicker/dist/react-datepicker.css";
@@ -155,6 +156,10 @@ const FaceEvents = () => {
   }, [handleFilter]);
 
   const onSearch = () => {
+    handleFilter({}, activeTab);
+  };
+
+  const handleRefresh = () => {
     handleFilter({}, activeTab);
   };
 
@@ -360,6 +365,14 @@ const FaceEvents = () => {
             </div>
           </div>
           <div className="view-actions">
+            <button 
+              className={`refresh-btn ${loading ? 'spinning' : ''}`}
+              onClick={handleRefresh}
+              disabled={loading}
+              title="Refresh events"
+            >
+              <RotateCw size={18} />
+            </button>
             <div className="view-toggle">
               <button
                 className={`toggle-btn ${viewMode === 'list' ? 'active' : ''}`}

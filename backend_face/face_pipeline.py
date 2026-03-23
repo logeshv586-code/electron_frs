@@ -657,7 +657,9 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
         # Reconstruction of missing logic: Person tracking, quality check, and saving decision
         face_quality = _calculate_face_quality(face_crop_bgr, det_conf)
         should_save = False
-        face_crop_to_save = face_crop_bgr
+        # Use padded crop for saving so the full face (head + shoulders) is captured
+        padded_crop = _extract_face_crop(frame_bgr, current_bbox, padding=0.5)
+        face_crop_to_save = padded_crop if padded_crop is not None else face_crop_bgr
         save_label = name
 
         if stream_id:

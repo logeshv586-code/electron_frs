@@ -889,8 +889,9 @@ async def get_attendance_logic(
     company_id = current_user.get("company_id")
 
     if role == "SuperAdmin":
-        # SuperAdmin sees everyone
-        pass
+        # SuperAdmin sees 'default' company implicitly
+        company_id = "default"
+        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == "default" or not pdata.get("company_id")}
     else:
         # Admins and Supervisors see everyone in their own company
         if company_id:
@@ -946,7 +947,7 @@ async def get_attendance_logic(
     role = current_user.get("role")
     company_id = current_user.get("company_id")
     if role == "SuperAdmin":
-        company_id = None
+        company_id = "default"
         
     assigned_cameras = current_user.get("assigned_cameras")
 
@@ -1004,19 +1005,10 @@ async def get_attendance_logic(
                 if person_id in attendance_records:
                     attendance_records[person_id]["events"].append(ts)
 
-    if company_id is None:
-        # SuperAdmin: scan all
-        if os.path.exists(KNOWN_FACES_DIR):
-            companies = [d for d in os.listdir(KNOWN_FACES_DIR) if os.path.isdir(os.path.join(KNOWN_FACES_DIR, d))]
-            for comp in companies:
-                if comp.startswith("camera_") or comp == "__pycache__":
-                    continue
-                scan_for_attendance(comp, os.path.join(KNOWN_FACES_DIR, comp))
-            if "default" not in companies:
-                scan_for_attendance("default", KNOWN_FACES_DIR)
-    else:
-        # Specific company
-        scan_for_attendance(company_id, os.path.join(KNOWN_FACES_DIR, company_id))
+    if not company_id:
+        company_id = "default"
+        
+    scan_for_attendance(company_id, os.path.join(KNOWN_FACES_DIR, company_id))
 
     # Calculate Punch In / Out and Working Hours
     result_list = []
@@ -1386,9 +1378,14 @@ async def get_attendance_aggregate(
         
         current_user = request.scope.get("user", {})
         company_id = current_user.get("company_id")
-        if company_id:
+        role = current_user.get("role")
+        
+        if role == "SuperAdmin":
+            company_id = "default"
+            persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == "default" or not pdata.get("company_id")}
+        elif company_id:
             persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == company_id}
-        elif current_user.get("role") != "SuperAdmin":
+        else:
             username = current_user.get("username")
             persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
 
@@ -1500,8 +1497,15 @@ async def export_employees(request: Request):
     metadata = get_metadata()
     persons = metadata.get("persons", metadata)
     
+    company_id = current_user.get("company_id")
+    role = current_user.get("role")
+    
     # SaaS Filter
-    if current_user.get("role") != "SuperAdmin":
+    if role == "SuperAdmin":
+        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == "default" or not pdata.get("company_id")}
+    elif company_id:
+        persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("company_id") == company_id}
+    else:
         username = current_user.get("username")
         persons = {pid: pdata for pid, pdata in persons.items() if pdata.get("created_by") == username}
     

@@ -54,17 +54,22 @@ const StreamViewer = () => {
         const activeOnes = allCameras.filter(camera => camera.is_active);
         setActiveCameras(activeOnes);
 
-        // Initialize bbox toggles for new cameras (default: ON)
-        setBboxToggles(prev => {
-          const updated = { ...prev };
-          activeOnes.forEach(cam => {
-            const camId = cam.id;
-            if (!(camId in updated)) {
-              updated[camId] = true; // Default ON
+        // Initialize bbox toggles based on backend settings
+        const initialToggles = {};
+        for (const cam of activeOnes) {
+            try {
+                const streamId = `${cam.collectionId || cam.collection_id || cam.collection_name || 'unassigned'}_${cam.ip_address || cam.ip || ''}`;
+                const res = await axios.get(`${API_BASE_URL}/api/bounding-box/status?stream_id=${streamId}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                initialToggles[cam.id] = res.data.enabled;
+            } catch (e) {
+                console.warn(`Failed to fetch bbox status for ${cam.name}, defaulting to true`, e);
+                initialToggles[cam.id] = true;
             }
-          });
-          return updated;
-        });
+        }
+        
+        setBboxToggles(prev => ({ ...prev, ...initialToggles }));
       } else {
         setError('No cameras found');
       }

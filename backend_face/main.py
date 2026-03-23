@@ -1282,7 +1282,7 @@ class BoundingBoxToggle(BaseModel):
     """Pydantic model for bounding box toggle request"""
     enabled: bool
     stream_id: Optional[str] = None
-    camera_id: Optional[str] = None
+    camera_id: Optional[int] = None
 
 @app.post("/api/bounding-box/toggle", tags=["Visualization"])
 async def toggle_bounding_box(request: Request, payload: BoundingBoxToggle):

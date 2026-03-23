@@ -10,8 +10,20 @@ from pydantic import BaseModel
 import shutil
 from datetime import datetime
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
+
+# Add parent directory to path to import face_pipeline safely
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+try:
+    from face_pipeline import clear_company_embeddings_cache
+except ImportError:
+    def clear_company_embeddings_cache(company_id: str) -> None:
+        pass
+
 try:
     import face_recognition
 except Exception as e:
@@ -843,6 +855,15 @@ async def register_single(
         with open(METADATA_FILE, 'w') as f:
             json.dump(person_data, f, indent=4)
 
+        # Clear memory cache so stream picks up new face immediately
+        try:
+            cache_file = os.path.join(DATA_DIR, f"embeddings_cache_{company_id or 'default'}.pkl")
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+            clear_company_embeddings_cache(company_id or "default")
+        except Exception as e:
+            logger.error(f"Error checking cache: {e}")
+
         return RegistrationResponse(
             status="success",
             message=f"Successfully registered {name}",
@@ -1046,6 +1067,15 @@ async def register_bulk(
         # Save updated metadata
         with open(METADATA_FILE, 'w') as f:
             json.dump(metadata, f, indent=4)
+            
+        # Invalidate cache
+        try:
+            cache_file = os.path.join(DATA_DIR, f"embeddings_cache_{company_id or 'default'}.pkl")
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+            clear_company_embeddings_cache(company_id or "default")
+        except Exception as e:
+            logger.error(f"Failed to clear cache: {e}")
 
         # Cleanup temporary files
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1412,6 +1442,8 @@ async def delete_person_metadata(request: Request, person_id: str):
             if os.path.exists(cache_file):
                 os.remove(cache_file)
                 logger.info(f"Invalidated embeddings cache for tenant {company_id or 'default'}")
+            
+            clear_company_embeddings_cache(company_id or "default")
             
             # Also clear flat cache just in case
             flat_cache = os.path.join(DATA_DIR, "embeddings_cache.pkl")

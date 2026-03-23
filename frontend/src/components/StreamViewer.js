@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import MJPEGPlayer from './camera/MJPEGPlayer';
 import useAuthStore from '../store/authStore';
-import { Grid, Play, Square, RefreshCw, Settings, Monitor } from 'lucide-react';
+import { Square, RefreshCw, Settings, Monitor, Eye, EyeOff } from 'lucide-react';
 import { API_BASE_URL } from '../utils/apiConfig';
 import './StreamViewer.css';
 
@@ -12,9 +12,9 @@ const StreamViewer = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [gridLayout, setGridLayout] = useState('2x2');
-  const [showBoundingBox, setShowBoundingBox] = useState(false);
+  // Per-camera bounding box toggle: { cameraId: boolean } — default true
+  const [bboxToggles, setBboxToggles] = useState({});
   const { token } = useAuthStore();
-  // Auto-refresh functionality removed
 
   // Grid layout configurations
   const gridLayouts = {
@@ -26,6 +26,13 @@ const StreamViewer = () => {
     '4x3': { cols: 4, rows: 3, maxStreams: 12 },
     '4x4': { cols: 4, rows: 4, maxStreams: 16 }
   };
+
+  // Generate stream_id matching backend format: collectionId_ip
+  const getStreamId = useCallback((camera) => {
+    const collection = camera.collectionId || camera.collection_id || camera.collection_name || 'unassigned';
+    const ip = camera.ip_address || camera.ip || '';
+    return `${collection}_${ip}`;
+  }, []);
 
   // Fetch cameras from camera management system
   const fetchCameras = async () => {
@@ -47,8 +54,17 @@ const StreamViewer = () => {
         const activeOnes = allCameras.filter(camera => camera.is_active);
         setActiveCameras(activeOnes);
 
-        console.log('Fetched cameras:', allCameras);
-        console.log('Active cameras for streaming:', activeOnes);
+        // Initialize bbox toggles for new cameras (default: ON)
+        setBboxToggles(prev => {
+          const updated = { ...prev };
+          activeOnes.forEach(cam => {
+            const camId = cam.id;
+            if (!(camId in updated)) {
+              updated[camId] = true; // Default ON
+            }
+          });
+          return updated;
+        });
       } else {
         setError('No cameras found');
       }
@@ -63,7 +79,7 @@ const StreamViewer = () => {
   // Convert camera data to format expected by MJPEGPlayer
   const convertCameraToPlayerFormat = (camera) => {
     const resolvedIp = camera.ip_address || camera.ip || extractIPFromRTSP(camera.rtsp_url);
-    const resolvedCollection = camera.collection_id || camera.collectionId || camera.collection_name || 'default';
+    const resolvedCollection = camera.collection_id || camera.collectionId || camera.collection_name || 'unassigned';
 
     return {
       id: camera.id,
@@ -83,42 +99,34 @@ const StreamViewer = () => {
       const url = new URL(rtspUrl);
       return url.hostname;
     } catch (error) {
-      // Fallback: try to extract IP using regex
       const ipMatch = rtspUrl.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
       return ipMatch ? ipMatch[1] : 'Unknown';
     }
   };
 
-  // Fetch cameras from camera management system on component mount only
   useEffect(() => {
     fetchCameras();
-
-    // Also fetch initial bounding box toggle state
-    const fetchBoundingBoxStatus = async () => {
-      if (!token) return;
-      try {
-        const response = await axios.get(`${API_BASE_URL}/api/bounding-box/status`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        setShowBoundingBox(response.data.enabled);
-      } catch (err) {
-        console.warn('Could not fetch bounding box status:', err);
-      }
-    };
-    fetchBoundingBoxStatus();
   }, [token]);
 
-  // Toggle bounding box visibility
-  const toggleBoundingBox = async () => {
-    const newState = !showBoundingBox;
+  // Toggle bounding box for a specific camera
+  const toggleCameraBbox = async (camera) => {
+    const camId = camera.id;
+    const streamId = getStreamId(camera);
+    const currentState = bboxToggles[camId] !== false; // default true
+    const newState = !currentState;
+
+    // Optimistic UI update
+    setBboxToggles(prev => ({ ...prev, [camId]: newState }));
+
     try {
       await axios.post(`${API_BASE_URL}/api/bounding-box/toggle`,
-        { enabled: newState },
+        { enabled: newState, stream_id: streamId, camera_id: camId },
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
-      setShowBoundingBox(newState);
     } catch (err) {
       console.error('Error toggling bounding box:', err);
+      // Revert on error
+      setBboxToggles(prev => ({ ...prev, [camId]: currentState }));
     }
   };
 
@@ -129,7 +137,6 @@ const StreamViewer = () => {
 
   const handlePlayerError = (camera, error) => {
     console.error(`Stream error for camera ${camera.name}:`, error);
-    // You could add a fallback here or show error state
   };
 
   const currentLayout = gridLayouts[gridLayout];
@@ -197,25 +204,6 @@ const StreamViewer = () => {
           </div>
 
           <div className="control-group">
-            <div className="bbox-toggle-container">
-              <span className="toggle-label">Show Boxes</span>
-              <button
-                onClick={toggleBoundingBox}
-                className={`advanced-toggle ${showBoundingBox ? 'on' : 'off'}`}
-                title={showBoundingBox ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
-              >
-                <div className="toggle-handle">
-                  {showBoundingBox ? (
-                    <Square size={10} className="handle-icon" fill="currentColor" />
-                  ) : (
-                    <div className="handle-dot" />
-                  )}
-                </div>
-              </button>
-            </div>
-          </div>
-
-          <div className="control-group">
             <button
               onClick={fetchCameras}
               className="refresh-btn"
@@ -260,27 +248,40 @@ const StreamViewer = () => {
               gridAutoRows: 'auto'
             }}
           >
-            {convertedCameras.map((camera, index) => (
-              <div key={camera.id} className="video-cell">
-                <div className="video-header">
-                  <span className="camera-name">{camera.name}</span>
-                  <span className="stream-status live">● LIVE</span>
-                </div>
+            {convertedCameras.map((camera) => {
+              const bboxOn = bboxToggles[camera.id] !== false;
+              return (
+                <div key={camera.id} className="video-cell">
+                  <div className="video-header">
+                    <span className="camera-name">{camera.name}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button
+                        onClick={() => toggleCameraBbox(camera)}
+                        className={`cam-bbox-toggle ${bboxOn ? 'on' : 'off'}`}
+                        title={bboxOn ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
+                      >
+                        {bboxOn ? <Eye size={14} /> : <EyeOff size={14} />}
+                        <span className="cam-bbox-label">{bboxOn ? 'BOXES' : 'BOXES'}</span>
+                      </button>
+                      <span className="stream-status live">● LIVE</span>
+                    </div>
+                  </div>
 
-                <div className="video-container">
-                  <MJPEGPlayer
-                    camera={camera}
-                    onPlay={() => handlePlayerPlay(camera)}
-                    onError={(error) => handlePlayerError(camera, error)}
-                  />
-                </div>
+                  <div className="video-container">
+                    <MJPEGPlayer
+                      camera={camera}
+                      onPlay={() => handlePlayerPlay(camera)}
+                      onError={(error) => handlePlayerError(camera, error)}
+                    />
+                  </div>
 
-                <div className="video-footer">
-                  <span className="camera-ip">{camera.ip}</span>
-                  <span className="camera-collection">{camera.collectionId}</span>
+                  <div className="video-footer">
+                    <span className="camera-ip">{camera.ip}</span>
+                    <span className="camera-collection">{camera.collectionId}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {/* Fill empty cells */}
             {Array.from({

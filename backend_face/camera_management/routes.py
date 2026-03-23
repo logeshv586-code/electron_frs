@@ -629,10 +629,6 @@ async def update_collection(
         current_user = request.scope.get("user", {})
         company_id = current_user.get("company_id") if current_user.get("role") != "SuperAdmin" else None
 
-        # Prevent editing the default collection
-        if collection_id == "default":
-            raise HTTPException(status_code=400, detail="Cannot edit the default collection")
-
         collections = service._load_collections()
         
         # Find the collection to update
@@ -681,10 +677,6 @@ async def delete_collection(
         current_user = request.scope.get("user", {})
         company_id = current_user.get("company_id") if current_user.get("role") != "SuperAdmin" else None
 
-        # Prevent deletion of default collection
-        if collection_id == "default":
-            raise HTTPException(status_code=400, detail="Cannot delete the default collection")
-        
         collections = service._load_collections()
         
         # Find the collection
@@ -695,13 +687,13 @@ async def delete_collection(
         # Authorization check
         if company_id and collection.company_id != company_id:
             raise HTTPException(status_code=403, detail="Not authorized to delete this collection")
-        
-        # Move all cameras in this collection to default
+            
+        # Remove this collection from all cameras
         cameras = service._load_cameras()
         for camera in cameras:
             if camera.collection_id == collection_id:
-                camera.collection_id = "default"
-                camera.collection_name = "Default Collection"
+                camera.collection_id = None
+                camera.collection_name = None
         service._save_cameras(cameras)
         
         # Remove the collection

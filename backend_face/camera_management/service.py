@@ -24,8 +24,7 @@ class EnhancedCameraService:
         os.makedirs(data_dir, exist_ok=True)
         
         # Initialize default collection
-        self._ensure_default_collection()
-    
+        
     def _ensure_default_collection(self):
         """Ensure default collection exists"""
         collections = self._load_collections()

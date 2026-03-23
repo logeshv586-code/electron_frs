@@ -259,6 +259,12 @@ def init(data_dir: str, ctx: int = -1, det_size: Tuple[int, int] = (640, 640), u
             else:
                 raise
 
+def clear_company_embeddings_cache(company_id: str) -> None:
+    """Clear the in-memory embeddings cache for a specific company."""
+    with embedding_lock:
+        if company_id in company_embeddings:
+            del company_embeddings[company_id]
+            logger.info(f"Cleared in-memory embeddings cache for company {company_id}")
 
 def load_company_embeddings(company_id: str) -> Dict[str, Any]:
     """Load embeddings for a specific company and cache them."""
@@ -437,6 +443,10 @@ def process_frame(frame_bgr: np.ndarray, force_process: bool = False, stream_id:
                 company_id = s_info.get('company_id')
         except Exception:
             pass
+            
+    # Treat unassigned (Null/None) companies as 'default' so SuperAdmin registered faces are loaded
+    if not company_id or str(company_id).strip() in ("", "None"):
+        company_id = "default"
     
     # Load embeddings for this company
     if company_id:

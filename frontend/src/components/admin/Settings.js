@@ -70,7 +70,7 @@ const Settings = () => {
     face_recognition_enabled: true,
     show_bounding_boxes: true,
     unknown_detection_enabled: true,
-    long_distance_detection_enabled: false,
+    long_distance_detection_enabled: true,
     min_face_size: 40,
     attendance: {
       punch_in: '09:30',
@@ -436,57 +436,8 @@ const Settings = () => {
           </div>
           <p className="section-desc">Enable or disable the core face recognition pipeline and detection features.</p>
           
+          
           <div className={`settings-grid sub-settings ${!settings.face_recognition_enabled ? 'greyed-out' : ''}`}>
-            <div className="checkbox-group">
-              <label>
-                <input
-                  type="checkbox"
-                  name="show_bounding_boxes"
-                  checked={settings.show_bounding_boxes}
-                  onChange={handleToggleChange}
-                  disabled={!settings.face_recognition_enabled}
-                />
-                Show Bounding Boxes on Streams
-              </label>
-            </div>
-            <div className="checkbox-group">
-              <label>
-                <input
-                  type="checkbox"
-                  name="unknown_detection_enabled"
-                  checked={settings.unknown_detection_enabled}
-                  onChange={handleToggleChange}
-                  disabled={!settings.face_recognition_enabled}
-                />
-                Detect & Save Unknown Faces
-              </label>
-            </div>
-            <div className="checkbox-group">
-              <label>
-                <input
-                  type="checkbox"
-                  name="long_distance_detection_enabled"
-                  checked={settings.long_distance_detection_enabled}
-                  onChange={handleToggleChange}
-                  disabled={!settings.face_recognition_enabled}
-                />
-                Long Distance Detection Mode
-              </label>
-            </div>
-            {settings.long_distance_detection_enabled && (
-              <div className="form-group">
-                <label>Minimum Face Size (pixels)</label>
-                <input
-                  type="number"
-                  name="min_face_size"
-                  value={settings.min_face_size}
-                  onChange={handleInputChange}
-                  disabled={!settings.face_recognition_enabled}
-                  min="20"
-                  max="200"
-                />
-              </div>
-            )}
           </div>
         </div>
 

@@ -29,27 +29,12 @@ FACE_PIPELINE_READY = False
 company_bbox_settings: Dict[str, bool] = {}
 bbox_lock = threading.Lock()
 
-def get_company_bbox_setting(company_id: Optional[str]) -> bool:
-    """Get bounding box setting for a company, with caching."""
-    # Robustly handle SuperAdmin (None/empty) to use 'default'
-    cid = company_id if company_id and str(company_id).strip() else "default"
-    
-    with bbox_lock:
-        if cid in company_bbox_settings:
-            return company_bbox_settings[cid]
-            
-    # Load from storage
+def get_company_bbox_setting(company_id: Optional[str] = None, stream_id: Optional[str] = None) -> bool:
+    """Get bounding box setting, checking stream-specific first then company."""
     try:
-        from auth.storage import get_settings
-        settings = get_settings(cid)
-        enabled = settings.get("show_bounding_boxes", True)
-        
-        with bbox_lock:
-            company_bbox_settings[cid] = enabled
-        logger.debug(f"[BBOX-INIT] Loaded settings for {cid}: {enabled}")
-        return enabled
-    except Exception as e:
-        logger.warning(f"Error loading settings for {cid}: {e}")
+        from camera_management.streaming import get_stream_manager
+        return get_stream_manager().get_bounding_box(stream_id=stream_id, company_id=company_id)
+    except Exception:
         return True
 
 # Create main FastAPI app
@@ -1124,15 +1109,15 @@ def generate_mjpeg_stream(stream_id: str):
                     )
                     # Broad diagnostic: Are we detecting anything?
                     if detections:
-                        logger.info(f"[BBOX-MAIN-PRE] Detected {len(detections)} faces. Toggle={get_company_bbox_setting(stream_company_id)}")
+                        logger.debug(f"[BBOX-MAIN-PRE] Detected {len(detections)} faces for {stream_id}")
                     
                     # Only render when faces were actually detected in THIS frame.
                     # An empty list or None means no faces – skip entirely.
                     # Get bounding box setting for this stream's company
-                    show_bbox = get_company_bbox_setting(stream_company_id)
+                    show_bbox = get_company_bbox_setting(company_id=stream_company_id, stream_id=stream_id)
                     
                     if show_bbox and detections:
-                        logger.info(f"[BBOX-MAIN] show={show_bbox}, detections={len(detections)}, company={stream_company_id}")
+                        logger.debug(f"[BBOX-MAIN] detections={len(detections)}, company={stream_company_id}")
                         processed_frame = render_bounding_boxes(
                             processed_frame, detections, show_bounding_box=True
                         )
@@ -1296,6 +1281,8 @@ async def options_handler(full_path: str):
 class BoundingBoxToggle(BaseModel):
     """Pydantic model for bounding box toggle request"""
     enabled: bool
+    stream_id: Optional[str] = None
+    camera_id: Optional[str] = None
 
 @app.post("/api/bounding-box/toggle", tags=["Visualization"])
 async def toggle_bounding_box(request: Request, payload: BoundingBoxToggle):
@@ -1304,48 +1291,39 @@ async def toggle_bounding_box(request: Request, payload: BoundingBoxToggle):
     When enabled, bounding boxes are drawn on detected faces.
     When disabled, the video stream is shown without any overlays.
     This does NOT affect detection, recognition, or event-saving.
+    Optionally accepts stream_id for per-camera control.
     """
     current_user = request.scope.get("user", {})
     company_id: Optional[str] = None
-    # If Admin or Supervisor, force company_id from their account
     if current_user.get("role") != "SuperAdmin":
         company_id = current_user.get("company_id")
     else:
-        # SuperAdmin might want to toggle a specific company if provided, 
-        # but for global/default viewer, use 'default'
         company_id = "default"
         
     company_id = company_id if company_id and str(company_id).strip() else "default"
     
-    # Update cache
-    with bbox_lock:
-        company_bbox_settings[company_id] = payload.enabled
-    
-    # Persist in storage
-    try:
-        from auth.storage import get_settings, save_settings
-        settings = get_settings(company_id)
-        settings["show_bounding_boxes"] = payload.enabled
-        save_settings(settings, company_id)
-        logger.info(f"[BBOX-TOGG] {payload.enabled} for {company_id}")
-    except Exception as e:
-        logger.error(f"Error saving bbox toggle for {company_id}: {e}")
-        
-    # Update stream manager
+    # Update stream manager with per-stream or per-company toggle
     try:
         from camera_management.streaming import get_stream_manager
-        get_stream_manager().set_bounding_box(company_id, payload.enabled)
+        get_stream_manager().set_bounding_box(
+            enabled=payload.enabled,
+            stream_id=payload.stream_id,
+            company_id=company_id,
+            camera_id=payload.camera_id
+        )
+        logger.debug(f"[BBOX-TOGG] {payload.enabled} for stream={payload.stream_id} company={company_id}")
     except Exception as e:
-        logger.error(f"Error updating stream manager bbox for {company_id}: {e}")
+        logger.error(f"Error updating stream manager bbox: {e}")
         
-    return {"status": "success", "show_bounding_box": payload.enabled}
+    return {"status": "success", "show_bounding_box": payload.enabled, "stream_id": payload.stream_id}
 
 @app.get("/api/bounding-box/status", tags=["Visualization"])
-async def get_bounding_box_status(request: Request):
-    """Get current bounding box toggle state."""
+async def get_bounding_box_status(request: Request, stream_id: Optional[str] = None):
+    """Get current bounding box toggle state, optionally per-stream."""
     user = request.scope.get("user", {})
     company_id = user.get("company_id", "default")
-    return {"enabled": get_company_bbox_setting(company_id), "company_id": company_id}
+    enabled = get_company_bbox_setting(company_id=company_id, stream_id=stream_id)
+    return {"enabled": enabled, "company_id": company_id, "stream_id": stream_id}
 
 if __name__ == "__main__":
     import uvicorn

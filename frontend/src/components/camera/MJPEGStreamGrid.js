@@ -12,7 +12,8 @@ const MJPEGStreamGrid = ({ collectionName }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [gridLayout, setGridLayout] = useState('2x2');
-  const [showBoundingBox, setShowBoundingBox] = useState(false);
+  // Per-stream bounding box toggles: { streamId: boolean } — default true
+  const [bboxToggles, setBboxToggles] = useState({});
   const imgRefs = useRef({});
 
   // Grid layout configurations
@@ -93,31 +94,22 @@ const MJPEGStreamGrid = ({ collectionName }) => {
     };
   }, []);
 
-  // Fetch bounding box toggle state on mount
-  useEffect(() => {
-    const fetchBoundingBoxStatus = async () => {
-      try {
-        const response = await axios.get(`${API_BASE_URL}/api/bounding-box/status`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        setShowBoundingBox(response.data.enabled);
-      } catch (err) {
-        console.warn('Could not fetch bounding box status:', err);
-      }
-    };
-    fetchBoundingBoxStatus();
-  }, [token]);
-
-  const toggleBoundingBox = async () => {
-    const newState = !showBoundingBox;
+  // Toggle bounding box for a specific stream
+  const toggleStreamBbox = async (stream) => {
+    const sid = stream.stream_id;
+    const currentState = bboxToggles[sid] !== false; // default true
+    const newState = !currentState;
+    
+    setBboxToggles(prev => ({ ...prev, [sid]: newState }));
+    
     try {
       await axios.post(`${API_BASE_URL}/api/bounding-box/toggle`,
-        { enabled: newState },
+        { enabled: newState, stream_id: sid },
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
-      setShowBoundingBox(newState);
     } catch (err) {
       console.error('Error toggling bounding box:', err);
+      setBboxToggles(prev => ({ ...prev, [sid]: currentState }));
     }
   };
 
@@ -145,13 +137,7 @@ const MJPEGStreamGrid = ({ collectionName }) => {
             Stop All Streams
           </button>
 
-          <button
-            onClick={toggleBoundingBox}
-            className={`btn btn-bbox-toggle ${showBoundingBox ? 'active' : ''}`}
-            title={showBoundingBox ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
-          >
-            {showBoundingBox ? '⬜ Hide Boxes' : '🔲 Show Boxes'}
-          </button>
+
         </div>
 
         <div className="control-group">
@@ -190,33 +176,44 @@ const MJPEGStreamGrid = ({ collectionName }) => {
           gridTemplateRows: `repeat(${currentLayout.rows}, 1fr)`
         }}
       >
-        {displayStreams.map((stream, index) => (
-          <div key={stream.stream_id} className="video-cell">
-            <div className="video-header">
-              <span className="camera-label">
-                {stream.camera_ip}
-              </span>
-              <span className="stream-status">
-                ●
-              </span>
-            </div>
+        {displayStreams.map((stream, index) => {
+          const bboxOn = bboxToggles[stream.stream_id] !== false;
+          return (
+            <div key={stream.stream_id} className="video-cell">
+              <div className="video-header">
+                <span className="camera-label">
+                  {stream.camera_ip}
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <button
+                    onClick={() => toggleStreamBbox(stream)}
+                    className={`cam-bbox-toggle ${bboxOn ? 'on' : 'off'}`}
+                    title={bboxOn ? 'Hide Bounding Boxes' : 'Show Bounding Boxes'}
+                    style={{ fontSize: '0.65rem', padding: '2px 6px' }}
+                  >
+                    {bboxOn ? '👁' : '👁‍🗨'} BOXES
+                  </button>
+                  <span className="stream-status">●</span>
+                </div>
+              </div>
 
-            <div className="video-container">
-              <img
-                ref={el => imgRefs.current[stream.stream_id] = el}
-                src={`${API_BASE_URL}${stream.feed_url}${stream.feed_url.includes('?') ? '&' : '?'}token=${token}`}
-                alt={`Camera ${stream.camera_ip}`}
-                className="video-stream"
-                onError={() => handleImageError(stream.stream_id)}
-                onLoad={() => handleImageLoad(stream.stream_id)}
-              />
-            </div>
+              <div className="video-container">
+                <img
+                  ref={el => imgRefs.current[stream.stream_id] = el}
+                  src={`${API_BASE_URL}${stream.feed_url}${stream.feed_url.includes('?') ? '&' : '?'}token=${token}`}
+                  alt={`Camera ${stream.camera_ip}`}
+                  className="video-stream"
+                  onError={() => handleImageError(stream.stream_id)}
+                  onLoad={() => handleImageLoad(stream.stream_id)}
+                />
+              </div>
 
-            <div className="video-footer">
-              <small>{stream.stream_id}</small>
+              <div className="video-footer">
+                <small>{stream.stream_id}</small>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {/* Fill empty cells */}
         {Array.from({ length: maxStreams - displayStreams.length }).map((_, index) => (

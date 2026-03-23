@@ -8,8 +8,9 @@ import { API_BASE_URL } from '../utils/apiConfig';
 export const useCameraStore = create((set, get) => ({
   // State
   cameras: [],
+  cameras: [],
   collections: [],
-  activeCollection: 'default',
+  activeCollection: 'all',
   loading: false,
   error: null,
   currentPage: 1,
@@ -70,7 +71,7 @@ export const useCameraStore = create((set, get) => ({
         body: JSON.stringify({
           name: name.trim(),
           rtsp_url: streamUrl.trim(),
-          collection_id: collectionId || 'default',
+          collection_id: collectionId || null,
           location: location.trim()
         }),
       });
@@ -378,7 +379,7 @@ export const useCameraStore = create((set, get) => ({
       
       // If the deleted collection was selected, switch to 'all'
       if (get().activeCollection === collectionId) {
-        set({ activeCollection: 'default' });
+        set({ activeCollection: 'all' });
       }
       
       return result;

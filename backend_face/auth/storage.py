@@ -44,8 +44,8 @@ DEFAULT_SETTINGS = {
     "face_recognition_enabled": True,
     "show_bounding_boxes": True,
     "unknown_detection_enabled": True,
-    "long_distance_detection_enabled": False,
-    "min_face_size": 40,
+    "long_distance_detection_enabled": True,
+    "min_face_size": 20,
     "attendance": {
         "punch_in": "09:30",
         "punch_out": "18:00",

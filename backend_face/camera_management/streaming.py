@@ -20,8 +20,8 @@ class CameraStreamManager:
     def __init__(self):
         self.active_streams: Dict[str, Dict] = {}
         self.stream_lock = threading.Lock()
-        # Per-company bounding box visualization toggle (company_id -> bool)
-        self.company_bounding_boxes: Dict[str, bool] = {}
+        # Per-stream bounding box visualization toggle (stream_id -> bool)
+        self.stream_bounding_boxes: Dict[str, bool] = {}
         
         # Diagnostic logging for singleton verification
         instance_id = id(self)
@@ -146,17 +146,62 @@ class CameraStreamManager:
                     return stream_id
         return None
     
-    def set_bounding_box(self, enabled: bool, company_id: Optional[str] = None) -> None:
-        """Set bounding box visualization toggle for a company."""
-        cid = company_id or "default"
-        self.company_bounding_boxes[cid] = enabled
-        logger.info(f"CameraStreamManager bounding box visualization {'enabled' if enabled else 'disabled'} for company: {cid}")
+    def set_bounding_box(self, enabled: bool, stream_id: Optional[str] = None, company_id: Optional[str] = None, camera_id: Optional[str] = None) -> None:
+        """Set bounding box visualization toggle for a specific stream.
+        
+        Also resolves the real stream UUID when camera_id or a non-UUID stream_id is provided.
+        """
+        # Direct key storage
+        key = stream_id or company_id or "default"
+        self.stream_bounding_boxes[key] = enabled
+        
+        if camera_id:
+            self.stream_bounding_boxes[str(camera_id)] = enabled
+            
+        # Also resolve actual UUID stream IDs from active streams
+        # Frontend may pass camera_id or 'collection_ip' format instead of UUID
+        with self.stream_lock:
+            for sid, sinfo in self.active_streams.items():
+                # Match by camera_id
+                if camera_id and str(sinfo.get('camera_id')) == str(camera_id):
+                    self.stream_bounding_boxes[sid] = enabled
+                    logger.info(f"Bounding box {'enabled' if enabled else 'disabled'} for stream UUID: {sid} (matched camera_id={camera_id})")
+                # Match by IP in stream_id (frontend sends 'collection_ip')
+                elif stream_id and sinfo.get('rtsp_url'):
+                    cam_ip = sinfo.get('rtsp_url', '').split('@')[-1].split('/')[0].split(':')[0]
+                    if cam_ip and cam_ip in str(stream_id):
+                        self.stream_bounding_boxes[sid] = enabled
+                        logger.info(f"Bounding box {'enabled' if enabled else 'disabled'} for stream UUID: {sid} (matched IP in stream_id={stream_id})")
+        
+        logger.info(f"Bounding box {'enabled' if enabled else 'disabled'} for key: {key} and camera_id: {camera_id}")
     
-    def get_bounding_box(self, company_id: Optional[str] = None) -> bool:
-        """Get bounding box toggle state for a company."""
-        cid = company_id or "default"
-        # Return setting from cache or default to True
-        return self.company_bounding_boxes.get(cid, True)
+    def get_bounding_box(self, stream_id: Optional[str] = None, company_id: Optional[str] = None) -> bool:
+        """Get bounding box toggle state for a stream (default: True)."""
+        # First check direct hit
+        if stream_id and stream_id in self.stream_bounding_boxes:
+            return self.stream_bounding_boxes[stream_id]
+            
+        # Then, fallback to searching active streams to resolve stream_id
+        if stream_id:
+            with self.stream_lock:
+                # If we know the UUID, grab its camera_id
+                sinfo = self.active_streams.get(stream_id)
+                if sinfo:
+                    cam_id = str(sinfo.get('camera_id', ''))
+                    # Check if we stored a persistent state for this camera_id
+                    if cam_id in self.stream_bounding_boxes:
+                        return self.stream_bounding_boxes[cam_id]
+                        
+                # Alternative resolution if the given stream_id was from the frontend instead of backend UUID
+                for sid, sinfo in self.active_streams.items():
+                    cam_id = str(sinfo.get('camera_id', ''))
+                    # If the passed stream_id is actually a camera_id or ip-based format
+                    if cam_id == str(stream_id) or (sinfo.get('rtsp_url') and stream_id in sinfo.get('rtsp_url', '')):
+                        if sid in self.stream_bounding_boxes:
+                            return self.stream_bounding_boxes[sid]
+                            
+        key = company_id or "default"
+        return self.stream_bounding_boxes.get(key, True)
     
     def _validate_frame(self, frame: np.ndarray) -> bool:
         """Validate frame quality - check for corruption or pixelation"""
@@ -318,6 +363,13 @@ class CameraStreamManager:
         
         last_processed_frame_num = -1
         
+        # Resolve company_id from stream info once (for embedding lookup)
+        company_id = None
+        stream_info = self.get_stream_info(stream_id)
+        if stream_info:
+            company_id = stream_info.get('company_id')
+        logger.info(f"Face processing worker for {stream_id} using company_id={company_id}")
+        
         try:
             while self._is_stream_active(stream_id):
                 try:
@@ -336,26 +388,30 @@ class CameraStreamManager:
                     last_processed_frame_num = frame_num
                     frame_counter += 1
                     
+                    # Re-resolve company_id if it was None (stream may have started before info was set)
+                    if company_id is None:
+                        stream_info = self.get_stream_info(stream_id)
+                        if stream_info:
+                            company_id = stream_info.get('company_id')
+                    
                     # Skip processing for some frames to maintain frame rate.
-                    # Pass raw frame only – re-rendering stale tracking data
-                    # causes ghost bounding boxes and wastes CPU every other frame.
                     if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
-                        # Skip processing for this frame to maintain performance
                         pass
                     else:
-                        # Process frame for face detection only
+                        # Process frame for face detection + recognition
                         try:
                             from face_pipeline import process_frame as face_process_frame
-                            # We don't render here anymore. We just get detections.
-                            _, detections = face_process_frame(frame, force_process=True, stream_id=stream_id)
+                            _, detections = face_process_frame(
+                                frame, force_process=True,
+                                stream_id=stream_id,
+                                company_id=company_id
+                            )
                             
                             # Store detections thread-safely for the rendering generator
                             with self.detections_lock:
                                 self.latest_detections[stream_id] = detections
                         except Exception as e:
                             logger.error(f"Error in face processing: {e}")
-                            # Keep old detections if error occurs? Or clear? 
-                            # Let's keep them for a short time for stability.
                             pass
                             
                 except Exception as e:
@@ -456,11 +512,11 @@ class CameraStreamManager:
                     with self.detections_lock:
                         detections = self.latest_detections.get(stream_id, [])
 
-                    # 2. Get toggle status for this company
+                    # 2. Get toggle status for this stream
                     cid = stream_info.get('company_id') or "default"
-                    show_bbox = self.get_bounding_box(cid)
+                    show_bbox = self.get_bounding_box(stream_id=stream_id, company_id=cid)
 
-                    # 3. Render if enabled
+                    # 3. Render if enabled — only copy frame when drawing
                     processed_frame = frame
                     if show_bbox and detections:
                         try:
@@ -469,7 +525,6 @@ class CameraStreamManager:
                                 frame.copy(), detections, show_bounding_box=True
                             )
                         except Exception as e:
-                            logger.error(f"Rendering error in stream: {e}")
                             processed_frame = frame
 
                     # Encode and yield
@@ -553,7 +608,7 @@ class CameraStreamManager:
                     detections = self.latest_detections.get(stream_id, [])
                 
                 cid = stream_info.get('company_id') or "default"
-                show_bbox = self.get_bounding_box(cid)
+                show_bbox = self.get_bounding_box(stream_id=stream_id, company_id=cid)
 
                 # Render detections on demo frame
                 if show_bbox and detections:

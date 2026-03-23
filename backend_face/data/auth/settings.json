@@ -9,8 +9,8 @@
   "face_recognition_enabled": true,
   "show_bounding_boxes": true,
   "unknown_detection_enabled": true,
-  "long_distance_detection_enabled": false,
-  "min_face_size": 40,
+  "long_distance_detection_enabled": true,
+  "min_face_size": 20,
   "attendance": {
     "punch_in": "10:30",
     "punch_out": "18:00",

@@ -191,21 +191,11 @@ const MJPEGStreamPlayer = ({ camera }) => {
     }
   };
 
-  const stopStream = async () => {
-    if (streamId) {
-      try {
-        console.log(`Stopping stream: ${streamId}`);
-        await axios.delete(`${API_BASE_URL}/api/stop_stream/${streamId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
-          timeout: 5000
-        });
-      } catch (error) {
-        console.error('Error stopping stream:', error);
-      }
-    }
-
+  const stopStream = () => {
+    // Local cleanup only - don't stop the stream on the server
+    // so detection continues in the background even if the UI tab is closed
+    console.log(`MJPEGStreamPlayer stopping local view for: ${streamId || (camera && camera.name)}`);
+    
     setStreamUrl(null);
     setStreamId(null);
     setIsLoading(false);
@@ -243,7 +233,7 @@ const MJPEGStreamPlayer = ({ camera }) => {
       startStream();
     }
 
-    // Cleanup function
+    // Cleanup function - local only
     return () => {
       stopStream();
     };

@@ -44,10 +44,59 @@ app = FastAPI(
     version="1.0.0"
 )
 
+async def start_persistent_streams():
+    """Start streams for all cameras marked as active in the database"""
+    print("\n[DEBUG] Starting persistent streams check...")
+    logger.info("Starting persistent streams check...")
+    try:
+        from camera_management.service import EnhancedCameraService
+        from camera_management.streaming import get_stream_manager
+        
+        # Initialize camera service with absolute path relative to main.py
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, "data", "camera_management")
+        print(f"[DEBUG] Loading cameras from: {data_dir}")
+        camera_service = EnhancedCameraService(data_dir)
+        stream_manager = get_stream_manager()
+        
+        # Load all cameras
+        cameras = camera_service._load_cameras()
+        print(f"[DEBUG] Found {len(cameras)} total cameras")
+        active_count = 0
+        
+        for camera in cameras:
+            if camera.is_active:
+                try:
+                    # Check if stream already exists
+                    existing_stream = stream_manager.get_camera_stream(camera.id)
+                    if not existing_stream:
+                        # Start new stream
+                        stream_id = stream_manager.start_stream(
+                            camera_id=camera.id,
+                            rtsp_url=camera.rtsp_url,
+                            camera_name=camera.name,
+                            company_id=camera.company_id
+                        )
+                        logger.info(f"✓ Persistent stream started: {camera.name} ({stream_id})")
+                        active_count += 1
+                    else:
+                        logger.info(f"Stream already running for camera: {camera.name}")
+                        active_count += 1
+                except Exception as stream_err:
+                    logger.error(f"✗ Failed to start persistent stream for {camera.name}: {stream_err}")
+        
+        logger.info(f"Total persistent streams active: {active_count}")
+        
+    except Exception as e:
+        logger.error(f"Error starting persistent streams: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     start_license_checker()
     logger.info("License checker background task started")
+    
+    # Start persistent streams for all active cameras
+    await start_persistent_streams()
     
     # Start backup scheduler (non-blocking, handles Redis unavailability gracefully)
     try:

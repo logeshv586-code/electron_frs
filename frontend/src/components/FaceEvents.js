@@ -442,7 +442,7 @@ const FaceEvents = () => {
                       <td>
                         <div style={{ display: 'flex', gap: '8px' }}>
                           <button className="btn-action" onClick={() => setSelectedEvent(face)}>View</button>
-                          {user?.role === 'SuperAdmin' && (
+                          {user?.role?.toLowerCase() === 'superadmin' && (
                             <button 
                               className="btn-action" 
                               style={{ 
@@ -511,7 +511,7 @@ const FaceEvents = () => {
                 <p><strong>Type:</strong> <span className={`badge ${selectedEvent.name === 'Unknown' ? 'badge-unknown' : 'badge-known'}`}>{selectedEvent.name === 'Unknown' ? 'Unknown' : 'Known'}</span></p>
               </div>
               <div style={{ padding: '0 20px 20px', display: 'flex', justifyContent: 'flex-end' }}>
-                 {user?.role === 'SuperAdmin' && (
+                 {user?.role?.toLowerCase() === 'superadmin' && (
                    <button 
                       className="btn-action" 
                       style={{ 

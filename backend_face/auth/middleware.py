@@ -86,6 +86,10 @@ def check_path_permission(current_user: Dict[str, Any], path: str, method: str) 
     
     # Admin restrictions
     if user_role == "Admin":
+        # Explicitly forbid event deletion
+        if path == "/api/events/delete" and method == "DELETE":
+            return False
+            
         # Admins cannot access SuperAdmin-only endpoints
         if path.startswith("/api/users/") and ("superadmin" in path.lower() or path.endswith("/logs")):
             return False
@@ -93,6 +97,10 @@ def check_path_permission(current_user: Dict[str, Any], path: str, method: str) 
     
     # Supervisor restrictions
     if user_role == "Supervisor":
+        # Explicitly forbid event deletion
+        if path == "/api/events/delete" and method == "DELETE":
+            return False
+            
         # Supervisors can access dashboard, cameras, analytics, registration, collections, and events
         allowed_paths = [
             "/api/dashboard", 

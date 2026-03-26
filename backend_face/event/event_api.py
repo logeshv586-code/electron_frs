@@ -163,7 +163,7 @@ async def delete_event(
         username = current_user.get("username", "unknown")
         
         # Explicit SuperAdmin-only check
-        if role != "SuperAdmin":
+        if str(role).lower() != "superadmin":
             logger.warning(f"[DELETE-DENIED] User '{username}' (role={role}) attempted to delete event: {image_path}")
             raise HTTPException(status_code=403, detail="Only SuperAdmin can delete events")
         

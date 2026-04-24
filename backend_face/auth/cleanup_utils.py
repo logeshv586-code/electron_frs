@@ -17,6 +17,7 @@ CAMERA_ASSIGNMENTS_FILE = AUTH_DATA_DIR / "camera_assignments.json"
 METADATA_FILE = DATA_DIR / "metadata.json"
 GALLERY_DIR = DATA_DIR / "gallery"
 EMBEDDINGS_CACHE_FILE = DATA_DIR / "embeddings_cache.pkl"
+CAMERA_MGMT_DIR = DATA_DIR / "camera_management"
 
 def cleanup_user_tokens(username: str):
     """Remove all active tokens for a specific user."""
@@ -63,6 +64,20 @@ def cleanup_company_data(company_id: str):
     
     save_users(users)
     logger.info(f"Deleted {len(users_to_delete)} users associated with company {company_id}")
+
+    # Remove any tokens tied directly to this company, including stale tokens whose user was already gone.
+    try:
+        tokens = get_tokens()
+        original_count = len(tokens)
+        tokens = {
+            token: data for token, data in tokens.items()
+            if data.get("company_id") != company_id and data.get("username") not in users_to_delete
+        }
+        if len(tokens) < original_count:
+            save_tokens(tokens)
+            logger.info(f"Cleaned up {original_count - len(tokens)} company tokens for {company_id}")
+    except Exception as e:
+        logger.error(f"Failed to clean up company tokens: {e}")
 
     # 2. Clean up settings
     settings_file = AUTH_DATA_DIR / f"settings_{company_id}.json"
@@ -161,6 +176,52 @@ def cleanup_company_data(company_id: str):
             logger.error(f"Failed to delete company gallery folder: {e}")
 
     # 9. Clear embeddings cache to force rebuild
+    cache_files = [
+        EMBEDDINGS_CACHE_FILE,
+        DATA_DIR / f"embeddings_cache_{company_id}.pkl",
+        DATA_DIR / f"embeddings_cache_{company_id.lower()}.pkl",
+    ]
+    for cache_file in cache_files:
+        if cache_file.exists():
+            try:
+                cache_file.unlink()
+                logger.info(f"Cleared embeddings cache: {cache_file.name}")
+            except Exception as e:
+                logger.error(f"Failed to clear embeddings cache {cache_file}: {e}")
+
+    # 10. Clean enhanced camera-management records scoped to this company.
+    try:
+        cameras_file = CAMERA_MGMT_DIR / "cameras.json"
+        if cameras_file.exists():
+            cameras = load_json(cameras_file, [])
+            if isinstance(cameras, list):
+                original_count = len(cameras)
+                cameras = [c for c in cameras if not (isinstance(c, dict) and c.get("company_id") == company_id)]
+                if len(cameras) < original_count:
+                    atomic_write_json(cameras_file, cameras)
+                    logger.info(f"Deleted {original_count - len(cameras)} cameras for company {company_id}")
+    except Exception as e:
+        logger.error(f"Failed to clean camera records for company {company_id}: {e}")
+
+    try:
+        collections_file = CAMERA_MGMT_DIR / "collections.json"
+        if collections_file.exists():
+            collections = load_json(collections_file, [])
+            if isinstance(collections, list):
+                original_count = len(collections)
+                collections = [c for c in collections if not (isinstance(c, dict) and c.get("company_id") == company_id)]
+                if len(collections) < original_count:
+                    atomic_write_json(collections_file, collections)
+                    logger.info(f"Deleted {original_count - len(collections)} collections for company {company_id}")
+    except Exception as e:
+        logger.error(f"Failed to clean collection records for company {company_id}: {e}")
+
+    try:
+        from face_pipeline import clear_company_embeddings_cache
+        clear_company_embeddings_cache(company_id)
+    except Exception:
+        pass
+
     if EMBEDDINGS_CACHE_FILE.exists():
         try:
             EMBEDDINGS_CACHE_FILE.unlink()

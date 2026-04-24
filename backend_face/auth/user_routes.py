@@ -194,6 +194,8 @@ async def create_user_endpoint(request: CreateUserRequest, request_obj: Request)
             actual_company_id = company["id"]
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Company creation failed: {str(e)}")
+    elif current_user["role"] == "SuperAdmin" and request.role == "Admin":
+        raise HTTPException(status_code=400, detail="Company name and company ID are required for Admin users")
 
     try:
         user = create_user(
@@ -340,6 +342,10 @@ async def get_system_settings_endpoint(request: Request, cid: Optional[str] = No
     
     # Use provided cid if SuperAdmin, otherwise use user's company_id
     effective_company_id = cid if current_user["role"] == "SuperAdmin" else current_user.get("company_id")
+    if current_user["role"] == "SuperAdmin" and effective_company_id:
+        from .companies import get_company
+        if not get_company(effective_company_id):
+            raise HTTPException(status_code=404, detail="Company not found")
     return {"settings": get_settings(effective_company_id)}
 
 
@@ -350,6 +356,10 @@ async def update_system_settings_endpoint(request: SettingsRequest, request_obj:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     
     effective_company_id = cid if current_user["role"] == "SuperAdmin" else current_user.get("company_id")
+    if current_user["role"] == "SuperAdmin" and effective_company_id:
+        from .companies import get_company
+        if not get_company(effective_company_id):
+            raise HTTPException(status_code=404, detail="Company not found")
     settings = get_settings(effective_company_id)
     updates = request.model_dump(exclude_unset=True)
     

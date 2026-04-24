@@ -151,6 +151,16 @@ const UserManagement = () => {
       const method = isEditing ? 'PUT' : 'POST';
 
       const body = { ...formData };
+      if (body.company_name) body.company_name = body.company_name.trim();
+      if (body.company_id) {
+        body.company_id = body.company_id
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, '-')
+          .replace(/[^a-z0-9_-]/g, '')
+          .replace(/-+/g, '-')
+          .replace(/^[-_]+|[-_]+$/g, '');
+      }
       if (isEditing) {
         // Only send updates if editing
         delete body.username; // Can't change username
@@ -203,7 +213,9 @@ const UserManagement = () => {
         assigned_menus: [],
         license_duration: '1y',
         license_start_date: '',
-        license_end_date: ''
+        license_end_date: '',
+        company_name: '',
+        company_id: ''
       });
       setIsEditing(false);
       fetchUsers();
@@ -467,7 +479,13 @@ const UserManagement = () => {
                             value={formData.company_name}
                             onChange={(e) => {
                               const name = e.target.value;
-                              const slug = name.toLowerCase().replace(/ /g, '-').replace(/[^\w-]/g, '');
+                              const slug = name
+                                .toLowerCase()
+                                .trim()
+                                .replace(/\s+/g, '-')
+                                .replace(/[^a-z0-9_-]/g, '')
+                                .replace(/-+/g, '-')
+                                .replace(/^[-_]+|[-_]+$/g, '');
                               setFormData(prev => ({ ...prev, company_name: name, company_id: slug }));
                             }}
                             required
@@ -480,7 +498,14 @@ const UserManagement = () => {
                             type="text"
                             name="company_id"
                             value={formData.company_id}
-                            onChange={handleInputChange}
+                            onChange={(e) => {
+                              const value = e.target.value
+                                .toLowerCase()
+                                .replace(/\s+/g, '-')
+                                .replace(/[^a-z0-9_-]/g, '')
+                                .replace(/-+/g, '-');
+                              setFormData(prev => ({ ...prev, company_id: value }));
+                            }}
                             required
                             placeholder="e.g. acme-corp"
                           />

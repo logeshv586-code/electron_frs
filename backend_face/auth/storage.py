@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 import threading
+from copy import deepcopy
 
 AUTH_DATA_DIR = Path("data/auth")
 USERS_FILE = AUTH_DATA_DIR / "users.json"
@@ -59,16 +60,16 @@ DEFAULT_SETTINGS = {
 def get_settings(company_id: Optional[str] = None) -> Dict[str, Any]:
     
     if not company_id:
-        return load_json(SETTINGS_FILE, DEFAULT_SETTINGS)
+        return load_json(SETTINGS_FILE, deepcopy(DEFAULT_SETTINGS))
         
     # Load company-specific settings if they exist
     company_settings_file = AUTH_DATA_DIR / f"settings_{company_id}.json"
     if company_settings_file.exists():
-        return load_json(company_settings_file, DEFAULT_SETTINGS)
+        return load_json(company_settings_file, deepcopy(DEFAULT_SETTINGS))
         
     # If no company settings file exists, return the hardcoded default template
     # DO NOT inherit from global/SuperAdmin settings.
-    return DEFAULT_SETTINGS
+    return deepcopy(DEFAULT_SETTINGS)
 
 def save_settings(settings: Dict[str, Any], company_id: Optional[str] = None):
     if company_id:

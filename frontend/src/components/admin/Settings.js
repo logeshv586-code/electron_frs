@@ -95,11 +95,12 @@ const Settings = () => {
       });
       if (response.ok) {
         const data = await response.json();
-        setCompanies(data.companies || []);
-        if (data.companies && data.companies.length > 0) {
-          // If no company selected, select the first one
-          setSelectedCompanyId(prev => prev || data.companies[0].id);
-        }
+        const activeCompanies = data.companies || [];
+        setCompanies(activeCompanies);
+        setSelectedCompanyId(prev => {
+          if (!prev) return '';
+          return activeCompanies.some(company => company.id === prev) ? prev : '';
+        });
       }
     } catch (error) {
       console.error('Error fetching companies:', error);
@@ -129,6 +130,10 @@ const Settings = () => {
         }));
       } else {
         setMessage({ type: 'error', text: data.detail || 'Failed to fetch settings' });
+        if (response.status === 404 && user?.role === 'SuperAdmin') {
+          setSelectedCompanyId('');
+          fetchCompanies();
+        }
       }
     } catch (error) {
       setMessage({ type: 'error', text: 'Error connecting to server' });

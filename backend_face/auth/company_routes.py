@@ -9,6 +9,7 @@ router = APIRouter(prefix="/companies", tags=["companies"])
 
 class CreateCompanyRequest(BaseModel):
     name: str
+    company_id: Optional[str] = None
     address: Optional[str] = ""
 
 class UpdateCompanyRequest(BaseModel):
@@ -21,7 +22,12 @@ async def create_company_endpoint(request: CreateCompanyRequest, request_obj: Re
     if not current_user or current_user["role"] != "SuperAdmin":
         raise HTTPException(status_code=403, detail="Only SuperAdmin can manage companies")
     
-    company = create_company(name=request.name, address=request.address)
+    try:
+        company = create_company(name=request.name, company_id=request.company_id)
+        if request.address:
+            company = update_company(company["id"], {"address": request.address}) or company
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"message": "Company created successfully", "company": company}
 
 @router.get("/")
@@ -53,9 +59,12 @@ async def update_company_endpoint(company_id: str, request: UpdateCompanyRequest
         raise HTTPException(status_code=403, detail="Only SuperAdmin can manage companies")
     
     updates = request.dict(exclude_unset=True)
-    company = update_company(company_id, updates)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+    try:
+        company = update_company(company_id, updates)
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"message": "Company updated successfully", "company": company}
 
 @router.delete("/{company_id}")

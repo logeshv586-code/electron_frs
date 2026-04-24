@@ -128,6 +128,35 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+def _candidate_event_paths_from_url(clean_path: str, backend_root: str) -> List[str]:
+    """Map captured-image URLs to every filesystem layout the app has used."""
+    import urllib.parse
+
+    relative = clean_path.replace('/api/captured/image/', '', 1)
+    segments = [urllib.parse.unquote(p) for p in relative.split('/') if p]
+    if len(segments) < 2:
+        return []
+
+    face_type = segments[0]
+    image_name = segments[-1]
+    candidates = [os.path.join(backend_root, "captured_faces", *segments)]
+
+    if face_type == "unknown" and len(segments) >= 5:
+        _, company_id, camera, person, _ = segments[:5]
+        candidates.extend([
+            os.path.join(backend_root, "captured_faces", "unknown", company_id, camera, image_name),
+            os.path.join(backend_root, "captured_faces", "unknown", company_id, image_name),
+            os.path.join(backend_root, "captured_faces", "unknown", camera, image_name),
+        ])
+    elif face_type == "known" and len(segments) >= 5:
+        _, company_id, camera, person, _ = segments[:5]
+        candidates.extend([
+            os.path.join(backend_root, "captured_faces", "known", company_id, camera, person, image_name),
+            os.path.join(backend_root, "captured_faces", "known", camera, person, image_name),
+        ])
+
+    return candidates
+
 def load_camera_name_map() -> Dict[str, str]:
     """Load cameras and create a mapping from slugified IDs to real names."""
     try:
@@ -175,24 +204,21 @@ async def delete_event(
         clean_path = image_path.split("?")[0]
         
         # Convert URL path to filesystem path
+        candidate_paths = []
         if clean_path.startswith('/api/captured/image/'):
             # URL pattern: /api/captured/image/{face_type}/{company_id}/{camera}/{person}/{image_name}
             # Filesystem:   captured_faces/{face_type}/{company_id}/{camera}/{person}/{image_name}
-            relative = clean_path.replace('/api/captured/image/', '', 1)
-            
-            # Decode URL encoding (%20 -> space)
-            import urllib.parse
-            relative = urllib.parse.unquote(relative)
-            
-            clean_path = os.path.join('captured_faces', relative.replace('/', os.sep))
-            logger.info(f"[DELETE] URL '{image_path}' -> path '{clean_path}'")
+            candidate_paths = _candidate_event_paths_from_url(clean_path, backend_root)
+            logger.info(f"[DELETE] URL '{image_path}' -> candidates {candidate_paths}")
         
         # Prevent path traversal attacks
         if '..' in clean_path:
             raise HTTPException(status_code=403, detail="Forbidden: Path traversal detected")
         
         # Resolve to absolute path
-        if not os.path.isabs(clean_path):
+        if candidate_paths:
+            abs_path = next((os.path.abspath(p) for p in candidate_paths if os.path.exists(os.path.abspath(p))), os.path.abspath(candidate_paths[0]))
+        elif not os.path.isabs(clean_path):
             abs_path = os.path.join(backend_root, clean_path)
         else:
             abs_path = clean_path

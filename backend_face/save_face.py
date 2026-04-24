@@ -28,6 +28,8 @@ LOG_CSV = BASE_DIR / "capture_log.csv"
 
 # Minimum seconds between saves for same label (to avoid duplicates in-memory)
 DEFAULT_MIN_SAVE_INTERVAL_SECONDS = 8.0
+MIN_KNOWN_SAVE_CONFIDENCE = 0.35
+MIN_UNKNOWN_SAVE_CONFIDENCE = 0.45
 
 # Internal state for rate-limiting and thread-safety
 _last_saved_time: Dict[str, float] = {}
@@ -228,7 +230,8 @@ def save_face_image(
     stream_id: Optional[str] = None,
     prefer_png: bool = False,
     camera_name: Optional[str] = None,
-    company_id: Optional[str] = None
+    company_id: Optional[str] = None,
+    identity_key: Optional[str] = None
 ) -> Optional[Path]:
     if face_crop_bgr is None and (frame_bgr is None or bbox is None):
         return None
@@ -238,11 +241,15 @@ def save_face_image(
     cam = sanitize_label(camera_name) if camera_name else "default"
     comp = sanitize_label(company_id) if company_id else "default"
 
-    if confidence is not None and confidence < 0.6:
-        logger.warning(f"Skipping save: Low confidence {confidence:.2f} < 0.6 for {label_s}")
+    min_confidence = MIN_UNKNOWN_SAVE_CONFIDENCE if label_s == "unknown" else MIN_KNOWN_SAVE_CONFIDENCE
+    if confidence is not None and confidence < min_confidence:
+        logger.warning(
+            f"Skipping save: Low confidence {confidence:.2f} < {min_confidence:.2f} for {label_s}"
+        )
         return None
 
-    cooldown_key = f"{comp}:{cam}:{label_s}"
+    cooldown_identity = sanitize_label(identity_key) if identity_key else label_s
+    cooldown_key = f"{comp}:{cam}:{label_s}:{cooldown_identity}"
     now = time.time()
     with _lock:
         last_saved = _last_saved_time.get(cooldown_key, 0)

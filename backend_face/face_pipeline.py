@@ -25,7 +25,11 @@ from save_face import save_face_image
 logger = logging.getLogger(__name__)
 
 # ─────────────────────── Tuning constants ──────────────────────────────────
-TOLERANCE = 0.48          # face_recognition distance threshold
+TOLERANCE = 0.50          # base face_recognition distance threshold
+LONG_RANGE_TOLERANCE = 0.58
+LONG_RANGE_FACE_PX = 72
+VERY_LONG_RANGE_FACE_PX = 42
+MATCH_MARGIN = 0.025
 MIN_SAVE_INTERVAL = 5.0   # seconds between saves for same label
 UNKNOWN_MIN_SAVE_INTERVAL = 12.0
 
@@ -36,7 +40,7 @@ UNKNOWN_MIN_SAVE_INTERVAL = 12.0
 MIN_FACE_PX = 20          # absolute minimum face size in pixels (was 50–60)
 
 #   Upscale small face crops to this size before encoding (improves accuracy)
-ENCODING_MIN_SIZE = 112   # px; insightface & dlib work best ≥112
+ENCODING_MIN_SIZE = 128   # px; insightface & dlib work best >=112
 ENCODING_MAX_SIZE = 224   # don't upscale beyond this to stay fast
 
 # ── Tracking ────────────────────────────────────────────────────────────────
@@ -103,6 +107,191 @@ def _upscale_for_encoding(crop_bgr: np.ndarray) -> np.ndarray:
     blurred   = cv2.GaussianBlur(upscaled, (0, 0), sigmaX=1.0)
     upscaled  = cv2.addWeighted(upscaled, 1.5, blurred, -0.5, 0)
     return upscaled
+
+
+def _enhance_for_encoding(crop_bgr: np.ndarray) -> np.ndarray:
+    if crop_bgr is None or crop_bgr.size == 0:
+        return crop_bgr
+    try:
+        enhanced = _apply_clahe(crop_bgr)
+        blurred = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=0.8)
+        return cv2.addWeighted(enhanced, 1.35, blurred, -0.35, 0)
+    except Exception:
+        return crop_bgr
+
+
+def _crop_with_location(
+    frame: np.ndarray,
+    bbox: Tuple[int, int, int, int],
+    padding: float,
+) -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int, int, int]]]:
+    if frame is None or frame.size == 0:
+        return None, None
+
+    H, W = frame.shape[:2]
+    x1, y1, x2, y2 = bbox
+    fw, fh = max(1, x2 - x1), max(1, y2 - y1)
+    px, py = int(fw * padding), int(fh * padding)
+    cx1, cy1 = max(0, x1 - px), max(0, y1 - py)
+    cx2, cy2 = min(W, x2 + px), min(H, y2 + py)
+    if cx2 <= cx1 or cy2 <= cy1:
+        return None, None
+
+    crop = frame[cy1:cy2, cx1:cx2].copy()
+    loc = (y1 - cy1, x2 - cx1, y2 - cy1, x1 - cx1)
+    return crop, loc
+
+
+def _scale_crop_and_location(
+    crop_bgr: np.ndarray,
+    loc: Tuple[int, int, int, int],
+    face_target_px: int,
+) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+    top, right, bottom, left = loc
+    face_w = max(1, right - left)
+    face_h = max(1, bottom - top)
+    short = min(face_w, face_h)
+    if short >= face_target_px:
+        return crop_bgr, loc
+
+    scale = face_target_px / float(short)
+    if short * scale > ENCODING_MAX_SIZE:
+        scale = ENCODING_MAX_SIZE / float(short)
+
+    h, w = crop_bgr.shape[:2]
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    upscaled = cv2.resize(crop_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+    blurred = cv2.GaussianBlur(upscaled, (0, 0), sigmaX=1.0)
+    upscaled = cv2.addWeighted(upscaled, 1.5, blurred, -0.5, 0)
+    scaled_loc = (
+        int(top * scale),
+        int(right * scale),
+        int(bottom * scale),
+        int(left * scale),
+    )
+    return upscaled, scaled_loc
+
+
+def _encode_face_variants(
+    frame_bgr: np.ndarray,
+    bbox: Tuple[int, int, int, int],
+    min_side: int,
+) -> List[np.ndarray]:
+    """
+    Try a few aligned crops for distant faces. Far boxes are often a little
+    tight or soft, so a single full-crop descriptor can miss a known person.
+    """
+    encodings: List[np.ndarray] = []
+    paddings = (0.0, 0.18, 0.34) if min_side < LONG_RANGE_FACE_PX else (0.0, 0.18)
+    target = 160 if min_side < VERY_LONG_RANGE_FACE_PX else ENCODING_MIN_SIZE
+
+    for padding in paddings:
+        crop, loc = _crop_with_location(frame_bgr, bbox, padding)
+        if crop is None or loc is None or crop.size == 0:
+            continue
+
+        variants = [crop]
+        if min_side < LONG_RANGE_FACE_PX:
+            variants.append(_enhance_for_encoding(crop))
+
+        for variant in variants:
+            prepared, prepared_loc = _scale_crop_and_location(variant, loc, target)
+            rgb = cv2.cvtColor(prepared, cv2.COLOR_BGR2RGB)
+            try:
+                encs = face_recognition.face_encodings(
+                    rgb,
+                    known_face_locations=[prepared_loc],
+                    num_jitters=1,
+                    model='large'
+                )
+                if encs:
+                    encodings.extend(encs)
+            except Exception:
+                continue
+
+    return encodings
+
+
+def _threshold_for_face_size(min_side: int, det_conf: float) -> float:
+    if min_side < VERY_LONG_RANGE_FACE_PX:
+        return LONG_RANGE_TOLERANCE if det_conf >= 0.55 else 0.54
+    if min_side < LONG_RANGE_FACE_PX:
+        return 0.56 if det_conf >= 0.50 else 0.53
+    return TOLERANCE
+
+
+def _match_known_face(
+    candidate_encodings: List[np.ndarray],
+    known_enc: List[np.ndarray],
+    known_names: List[str],
+    min_side: int,
+    det_conf: float,
+) -> Tuple[str, float, Optional[np.ndarray], Optional[float]]:
+    if not candidate_encodings or len(known_enc) == 0:
+        return "Unknown", det_conf, None, None
+
+    threshold = _threshold_for_face_size(min_side, det_conf)
+    best: Optional[Dict[str, Any]] = None
+
+    for enc in candidate_encodings:
+        distances = face_recognition.face_distance(known_enc, enc)
+        if len(distances) == 0:
+            continue
+
+        sorted_idx = np.argsort(distances)
+        best_idx = int(sorted_idx[0])
+        best_name = known_names[best_idx]
+        best_dist = float(distances[best_idx])
+        if best_dist > threshold:
+            continue
+
+        per_name: Dict[str, Dict[str, float]] = {}
+        for idx, dist in enumerate(distances):
+            dist_f = float(dist)
+            person = known_names[idx]
+            entry = per_name.setdefault(person, {"min": dist_f, "votes": 0})
+            entry["min"] = min(entry["min"], dist_f)
+            if dist_f <= threshold + 0.02:
+                entry["votes"] += 1
+
+        same_person_images = known_names.count(best_name)
+        required_votes = 1 if same_person_images <= 1 else 2
+        if len(set(known_names)) == 1:
+            required_votes = 1
+
+        other_mins = [
+            item["min"] for person, item in per_name.items()
+            if person != best_name
+        ]
+        second_best = min(other_mins) if other_mins else 1.0
+        margin = second_best - best_dist
+
+        if per_name[best_name]["votes"] < required_votes:
+            continue
+        if other_mins and margin < MATCH_MARGIN and best_dist > TOLERANCE:
+            continue
+
+        score = (threshold - best_dist) + min(per_name[best_name]["votes"], 5) * 0.015 + max(margin, 0) * 0.2
+        if best is None or score > best["score"]:
+            best = {
+                "name": best_name,
+                "conf": max(0.0, 1.0 - best_dist),
+                "encoding": enc,
+                "distance": best_dist,
+                "score": score,
+                "votes": per_name[best_name]["votes"],
+                "threshold": threshold,
+            }
+
+    if best is None:
+        return "Unknown", det_conf, None, None
+
+    logger.debug(
+        "[MATCH] %s | dist=%.3f | thr=%.2f | votes=%s | conf=%.2f | size=%spx",
+        best["name"], best["distance"], best["threshold"], best["votes"], best["conf"], min_side
+    )
+    return best["name"], best["conf"], best["encoding"], best["distance"]
 
 
 def _calculate_iou(b1: Tuple, b2: Tuple) -> float:
@@ -554,24 +743,13 @@ def process_frame(frame_bgr: np.ndarray,
         if face_crop_bgr.size == 0:
             continue
 
-        # Upscale small/distant face crops before encoding
-        crop_for_enc = _upscale_for_encoding(face_crop_bgr)
-        face_crop_rgb = cv2.cvtColor(crop_for_enc, cv2.COLOR_BGR2RGB)
-
-        ch, cw = face_crop_rgb.shape[:2]
-        loc    = [(0, cw - 1, ch - 1, 0)]  # full crop as location for face_recognition
+        min_side = min(fw, fh)
+        candidate_encodings = (
+            _encode_face_variants(frame_bgr, current_bbox, min_side)
+            if len(known_enc) > 0 else []
+        )
 
         # ── Encoding ─────────────────────────────────────────────────────
-        try:
-            encs = face_recognition.face_encodings(
-                face_crop_rgb,
-                known_face_locations=loc,
-                num_jitters=1,
-                model='large'
-            )
-        except Exception:
-            encs = []
-
         # ── Track matching ───────────────────────────────────────────────
         matched_tid    = None
         persisted_name = None
@@ -586,33 +764,17 @@ def process_frame(frame_bgr: np.ndarray,
         face_encoding = None
 
         # ── Recognition ──────────────────────────────────────────────────
-        if encs and len(known_enc) > 0:
-            enc       = encs[0]
-            face_encoding = enc
-            distances = face_recognition.face_distance(known_enc, enc)
-            sorted_idx = np.argsort(distances)
-            best_dist  = float(distances[sorted_idx[0]])
-
-            if best_dist <= TOLERANCE:
-                best_name = known_names[sorted_idx[0]]
-                # Consensus vote (prevents single-image false positives)
-                top_n     = min(5, len(sorted_idx))
-                votes     = {}
-                for i in range(top_n):
-                    idx = sorted_idx[i]
-                    if float(distances[idx]) <= TOLERANCE + 0.05:
-                        vn = known_names[idx]
-                        votes[vn] = votes.get(vn, 0) + 1
-                required = min(2, known_names.count(best_name))
-                if votes.get(best_name, 0) >= required:
-                    name = best_name
-                    conf = max(0.0, 1.0 - best_dist)
-                    logger.debug(f"[MATCH] {name} | dist={best_dist:.3f} | conf={conf:.2f} | size={fw}x{fh}px")
-                else:
-                    logger.warning(f"[UNKNOWN] Low consensus | best={best_name} | votes={votes}")
-                    conf = det_conf
-            else:
-                conf = det_conf
+        matched_name, matched_conf, matched_encoding, _ = _match_known_face(
+            candidate_encodings,
+            known_enc,
+            known_names,
+            min_side,
+            det_conf,
+        )
+        if matched_name != "Unknown":
+            name = matched_name
+            conf = matched_conf
+            face_encoding = matched_encoding
         else:
             conf = det_conf
 
@@ -641,13 +803,19 @@ def process_frame(frame_bgr: np.ndarray,
         quality      = _calculate_face_quality(face_crop_bgr, det_conf)
         person_key   = f"{name}_{matched_tid}" if name != "Unknown" else f"Unknown_{matched_tid}"
         should_save  = False
-        min_side = min(fw, fh)
         save_interval = UNKNOWN_MIN_SAVE_INTERVAL if name == "Unknown" else MIN_SAVE_INTERVAL
         eligible_save = True
 
-        if name == "Unknown" and (min_side < 46 or quality < 0.34 or det_conf < 0.68):
+        if name == "Unknown" and (
+            min_side < MIN_FACE_PX
+            or det_conf < 0.45
+            or (quality < 0.12 and det_conf < 0.80)
+        ):
             eligible_save = False
-        elif name != "Unknown" and (min_side < 36 or quality < 0.24):
+        elif name != "Unknown" and (
+            min_side < MIN_FACE_PX
+            or (quality < 0.12 and det_conf < 0.55)
+        ):
             eligible_save = False
 
         if eligible_save and stream_id:
@@ -702,10 +870,11 @@ def process_frame(frame_bgr: np.ndarray,
                         min_interval=save_interval,
                         source="stream",
                         jpeg_quality=95,
-                        target_width=180,
-                        max_upscale=1.6,
+                        target_width=224,
+                        max_upscale=4.0,
                         camera_name=camera_name_to_save,
                         company_id=company_id_to_save,
+                        identity_key=person_key,
                     )
                 except Exception as e:
                     logger.error(f"Error saving face async: {e}")

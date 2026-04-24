@@ -48,6 +48,15 @@ class FaceMatchingService:
         self.gallery_images: List[GalleryImage] = []
         self.load_gallery()
 
+    @staticmethod
+    def _is_valid_image_file(image_path: str) -> bool:
+        """Return False for placeholder/corrupt files before face_recognition opens them."""
+        try:
+            img = cv2.imread(image_path)
+            return img is not None and img.size > 0
+        except Exception:
+            return False
+
     def load_gallery(self, company_id: Optional[str] = None):
         """Load gallery images and their encodings, optionally scoped by company"""
         logger.info(f"Loading gallery images for company: {company_id or 'all'}...")
@@ -88,6 +97,10 @@ class FaceMatchingService:
 
                     image_path = os.path.join(person_dir, img_file)
                     try:
+                        if not self._is_valid_image_file(image_path):
+                            logger.warning(f"Skipping invalid gallery image: {image_path}")
+                            continue
+
                         # Load and encode face
                         image = face_recognition.load_image_file(image_path)
                         encodings = face_recognition.face_encodings(image)

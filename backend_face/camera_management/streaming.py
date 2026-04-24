@@ -43,6 +43,7 @@ class CameraStreamManager:
         # Lock for thread-safe detection updates
         self.detections_lock = threading.Lock()
         self.latest_detections: Dict[str, List] = {}
+        self.latest_detection_times: Dict[str, float] = {}
         
         # Set FFmpeg environment variables to suppress H.264 error messages and handle errors better
         os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|strict;experimental|err_detect;ignore_err'
@@ -115,6 +116,10 @@ class CameraStreamManager:
                 del self.last_good_frames[stream_id]
             if stream_id in self.frame_buffers:
                 del self.frame_buffers[stream_id]
+            if stream_id in self.latest_detections:
+                del self.latest_detections[stream_id]
+            if stream_id in self.latest_detection_times:
+                del self.latest_detection_times[stream_id]
             
             with self.stream_lock:
                 if stream_id in self.active_streams:
@@ -355,11 +360,25 @@ class CameraStreamManager:
             return None
         
         return best_frame
+
+    def get_best_frame_for_bbox(self, stream_id: str, bbox: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
+        """Public wrapper used by the face pipeline to save the sharpest recent crop."""
+        return self._get_best_frame_from_buffer(stream_id, bbox)
     
     def _face_processing_worker(self, stream_id: str):
         """Background worker thread for async face processing using shared state (no queues)"""
         frame_counter = 0
-        PROCESS_EVERY_N_FRAMES = 2  # Process every 2nd frame for balance of speed and accuracy
+        process_every_n_frames = 4
+        try:
+            from face_pipeline import get_runtime_profile
+            profile = get_runtime_profile()
+            process_every_n_frames = int(profile.get("process_every_n", process_every_n_frames))
+            logger.info(
+                f"Face processing cadence for {stream_id}: every {process_every_n_frames} frame(s) "
+                f"on {profile.get('device', 'unknown')} det_size={profile.get('det_size')}"
+            )
+        except Exception as e:
+            logger.warning(f"Using default face processing cadence for {stream_id}: {e}")
         
         last_processed_frame_num = -1
         
@@ -395,21 +414,28 @@ class CameraStreamManager:
                             company_id = stream_info.get('company_id')
                     
                     # Skip processing for some frames to maintain frame rate.
-                    if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
+                    if frame_counter % process_every_n_frames != 0:
                         pass
                     else:
                         # Process frame for face detection + recognition
                         try:
                             from face_pipeline import process_frame as face_process_frame
+                            process_started = time.time()
                             _, detections = face_process_frame(
                                 frame, force_process=True,
                                 stream_id=stream_id,
                                 company_id=company_id
                             )
+                            elapsed = time.time() - process_started
+                            if elapsed > 0.45 and process_every_n_frames < 10:
+                                process_every_n_frames += 1
+                            elif elapsed < 0.16 and process_every_n_frames > 2:
+                                process_every_n_frames -= 1
                             
                             # Store detections thread-safely for the rendering generator
                             with self.detections_lock:
                                 self.latest_detections[stream_id] = detections
+                                self.latest_detection_times[stream_id] = time.time()
                         except Exception as e:
                             logger.error(f"Error in face processing: {e}")
                             pass
@@ -454,6 +480,14 @@ class CameraStreamManager:
                 # 1. CONNECT PHASE
                 if cap is None or not cap.isOpened():
                     logger.info(f"Connecting to camera {rtsp_url} for stream {stream_id}")
+                    
+                    # Fix latency: set FFMPEG options BEFORE opening the stream
+                    if not isinstance(rtsp_url, str) or not rtsp_url.isdigit():
+                        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+                            'rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|'
+                            'max_delay;0|analyzeduration;0|probesize;32'
+                        )
+                    
                     if isinstance(rtsp_url, str) and rtsp_url.isdigit():
                         cap = cv2.VideoCapture(int(rtsp_url))
                     else:
@@ -478,9 +512,6 @@ class CameraStreamManager:
                     
                     # Optimize cap settings
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    if not isinstance(rtsp_url, str) or not rtsp_url.isdigit():
-                        # Try to enable GPU acceleration if available
-                        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|fflags;nobuffer'
 
                 # 2. STREAM PHASE
                 while self._is_stream_active(stream_id):
@@ -505,12 +536,18 @@ class CameraStreamManager:
                     self.frame_counters[stream_id] = frame_count
 
                     # Shared state update for face processing background worker
-                    self.current_frames[stream_id] = (frame.copy(), frame_count)
+                    self.current_frames[stream_id] = (frame, frame_count)
+                    if stream_id not in self.frame_buffers:
+                        self.frame_buffers[stream_id] = deque(maxlen=self.max_frame_buffer_size)
+                    self.frame_buffers[stream_id].append((frame.copy(), time.time()))
 
                     # --- RENDERING PHASE (Synchronous with stream for flicker-free UI) ---
                     # 1. Get current detections thread-safely
                     with self.detections_lock:
                         detections = self.latest_detections.get(stream_id, [])
+                        det_age = time.time() - self.latest_detection_times.get(stream_id, 0)
+                    if det_age > 0.9:
+                        detections = []
 
                     # 2. Get toggle status for this stream
                     cid = stream_info.get('company_id') or "default"

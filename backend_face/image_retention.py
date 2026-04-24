@@ -1,10 +1,9 @@
 import os
 import time
 import logging
-import shutil
 import threading
+import json
 from datetime import datetime, timedelta
-from backup.backup_routes import get_backup_settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +17,16 @@ MIN_RETENTION_DAYS = 7
 CLEANUP_INTERVAL = 24 * 60 * 60
 
 def _get_retention_days() -> int:
-    """Get retention days from SuperAdmin backup settings"""
+    """Get image retention days without depending on backup route imports."""
     try:
-        # Settings are stored globally for SuperAdmin under 'default'
-        # The schema in BackupSettings includes retention_days
-        settings = get_backup_settings("default")
-        days = settings.get("retention_days", DEFAULT_RETENTION_DAYS)
+        days = os.getenv("IMAGE_RETENTION_DAYS") or os.getenv("BACKUP_RETENTION_DAYS")
+        if not days:
+            settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "backup_settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                days = settings.get("retention_days")
+        days = days or DEFAULT_RETENTION_DAYS
         return max(MIN_RETENTION_DAYS, int(days))
     except Exception as e:
         logger.warning(f"Error reading retention settings, using default {DEFAULT_RETENTION_DAYS}: {e}")

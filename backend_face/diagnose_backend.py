@@ -29,13 +29,13 @@ try:
     data_dir = os.path.join(project_root, "data")
     
     print("Initializing face pipeline on GPU (ctx=0)...")
-    init_face_pipeline(data_dir, ctx=0, det_size=(640, 640))
+    init_face_pipeline(data_dir, ctx=0, det_size=(1280, 1280))
     print("Face pipeline initialized successfully on GPU")
 except Exception as e:
     print(f"Face pipeline GPU initialization failed: {e}")
     try:
         print("Falling back to CPU (ctx=-1)...")
-        init_face_pipeline(data_dir, ctx=-1, det_size=(640, 640))
+        init_face_pipeline(data_dir, ctx=-1, det_size=(1280, 1280))
         print("Face pipeline initialized successfully on CPU")
     except Exception as e2:
         print(f"Face pipeline CPU initialization failed: {e2}")

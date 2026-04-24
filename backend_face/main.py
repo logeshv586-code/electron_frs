@@ -279,11 +279,10 @@ def mount_services():
 # Mount all services
 mount_services()
 # Initialize face pipeline (non-disruptive; skips if unavailable)
-# Try GPU first (ctx=0), will auto-fallback to CPU if GPU unavailable
+# Auto-select GPU when CUDA is available; otherwise use the CPU-safe profile.
 try:
-    # Optimized for Tesla T4 GPU: Balance of speed and accuracy
-    # (640, 640) significantly reduces compute load while maintaining detection quality
-    init_face_pipeline(os.path.join(os.path.dirname(__file__), "data"), ctx=0, det_size=(640, 640))
+    # GPU keeps long-distance detection at 1280. CPU is auto-throttled inside face_pipeline.
+    init_face_pipeline(os.path.join(os.path.dirname(__file__), "data"), ctx=-1, det_size=(1280, 1280))
     FACE_PIPELINE_READY = True
     logger.info("? Face pipeline initialized")
 except Exception as e:
@@ -1138,6 +1137,15 @@ def generate_mjpeg_stream(stream_id: str):
 
     stream = active_streams[stream_id]['stream']
     logger.info(f"Starting MJPEG stream generation for {stream_id}")
+    frame_index = 0
+    last_detections = []
+    last_detection_time = 0.0
+    process_every_n = 4
+    try:
+        from face_pipeline import get_runtime_profile
+        process_every_n = int(get_runtime_profile().get("process_every_n", process_every_n))
+    except Exception:
+        pass
 
     try:
         while True:
@@ -1151,11 +1159,20 @@ def generate_mjpeg_stream(stream_id: str):
                     frame = None
 
             if frame is not None:
+                frame_index += 1
+                processed_frame = frame
                 try:
                     stream_company_id = active_streams.get(stream_id, {}).get('company_id')
-                    processed_frame, detections = process_frame(
-                        frame, stream_id=stream_id, company_id=stream_company_id
-                    )
+                    detections = last_detections
+                    if frame_index % process_every_n == 0:
+                        processed_frame, detections = process_frame(
+                            frame, stream_id=stream_id, company_id=stream_company_id
+                        )
+                        last_detections = detections or []
+                        last_detection_time = time.time()
+                    elif time.time() - last_detection_time > 0.9:
+                        detections = []
+                        last_detections = []
                     # Broad diagnostic: Are we detecting anything?
                     if detections:
                         logger.debug(f"[BBOX-MAIN-PRE] Detected {len(detections)} faces for {stream_id}")

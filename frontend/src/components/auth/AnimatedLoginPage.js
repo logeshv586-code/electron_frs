@@ -6,7 +6,7 @@ import securityCoinIcon from '../../icon/securitycoin.png';
 const AnimatedLoginPage = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('');
+
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
@@ -21,27 +21,12 @@ const AnimatedLoginPage = () => {
     updateCoinAppearance();
   }, []);
 
-  useEffect(() => {
-    updateCoinAppearance();
-  }, [role]);
+
 
   const updateCoinAppearance = () => {
     const coin = document.getElementById('animatedCoin');
-    const coinTexts = document.querySelectorAll('.coin-text');
-
     if (coin) {
-      // Preserve the auth-coin class but reset other classes
       coin.className = 'auth-coin';
-
-      let roleText = '';
-      if (role) {
-        coin.classList.add(`coin-${role}`);
-      }
-
-      // Update all text elements (front and back)
-      coinTexts.forEach(el => {
-        el.textContent = roleText;
-      });
     }
   };
 
@@ -65,7 +50,7 @@ const AnimatedLoginPage = () => {
 
     try {
       // Pass null or empty string if no role is selected, the backend will auto-discover
-      const loginPromise = login(username, password, role || null, true);
+      const loginPromise = login(username, password, null, true);
       const [result] = await Promise.all([loginPromise, minAnimationTime]);
 
       if (result.success) {
@@ -203,20 +188,7 @@ const AnimatedLoginPage = () => {
           {/* Left Side - Login Form */}
           <div className="login-section">
             <form onSubmit={handleSubmit} id="loginForm" className="login-form">
-              <div className="form-group">
-                <label htmlFor="role" className="form-label">ACCESS LEVEL</label>
-                <select
-                  id="role"
-                  name="role"
-                  className="form-input"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                >
-                  <option value="" disabled hidden>SELECT ROLE</option>
-                  <option value="Admin">ADMIN</option>
-                  <option value="Supervisor">SUPERVISOR</option>
-                </select>
-              </div>
+
 
               <div className="form-group">
                 <label htmlFor="username" className="form-label">USERNAME</label>

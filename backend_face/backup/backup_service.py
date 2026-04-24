@@ -11,7 +11,8 @@ import base64
 import logging
 import gzip
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -22,41 +23,70 @@ BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 class RedisBackupService:
     """Manages Redis backup and restore operations for multi-tenant data."""
 
-    def __init__(self, redis_host: str = "localhost", redis_port: int = 6379,
-                 redis_password: Optional[str] = None, redis_db: int = 0,
+    def __init__(self, redis_host: Optional[str] = None, redis_port: Optional[int] = None,
+                 redis_password: Optional[str] = None, redis_db: Optional[int] = None,
                  backup_dir: Optional[str] = None):
         self.backup_dir = backup_dir or BACKUP_DIR
-        self.redis_host = redis_host
-        self.redis_port = redis_port
-        self.redis_password = redis_password
-        self.redis_db = redis_db
+        env_config = self._redis_config_from_env()
+        self.redis_host = redis_host or env_config["host"]
+        self.redis_port = int(redis_port or env_config["port"])
+        self.redis_password = redis_password if redis_password is not None else env_config["password"]
+        self.redis_db = int(redis_db if redis_db is not None else env_config["db"])
         self._redis = None
 
         # Ensure backup directory exists
         os.makedirs(self.backup_dir, exist_ok=True)
+
+    @staticmethod
+    def _redis_config_from_env() -> Dict[str, Any]:
+        """Read Redis connection settings from REDIS_URL or REDIS_* env vars."""
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
+            parsed = urlparse(redis_url)
+            return {
+                "host": parsed.hostname or "127.0.0.1",
+                "port": parsed.port or 6379,
+                "password": parsed.password or None,
+                "db": int((parsed.path or "/0").lstrip("/") or "0")
+            }
+
+        return {
+            "host": os.getenv("REDIS_HOST", "127.0.0.1"),
+            "port": int(os.getenv("REDIS_PORT", "6379")),
+            "password": os.getenv("REDIS_PASSWORD") or None,
+            "db": int(os.getenv("REDIS_DB", "0"))
+        }
 
     def _get_redis(self):
         """Lazy Redis connection with error handling."""
         if self._redis is None:
             try:
                 import redis
+
                 self._redis = redis.Redis(
                     host=self.redis_host,
                     port=self.redis_port,
                     password=self.redis_password,
                     db=self.redis_db,
-                    decode_responses=False  # We handle decoding manually for binary safety
+                    socket_connect_timeout=2,
+                    socket_timeout=5,
+                    decode_responses=False
                 )
+
                 # Test connection
                 self._redis.ping()
+
                 logger.info(f"[BACKUP] Connected to Redis at {self.redis_host}:{self.redis_port}")
+
             except ImportError:
                 logger.error("[BACKUP] redis package not installed. Run: pip install redis")
                 raise RuntimeError("Redis package not installed")
+
             except Exception as e:
                 self._redis = None
                 logger.error(f"[BACKUP] Failed to connect to Redis: {e}")
                 raise RuntimeError(f"Redis connection failed: {e}")
+
         return self._redis
 
     def _safe_decode(self, value: bytes) -> str:
@@ -228,22 +258,11 @@ class RedisBackupService:
             # Try to extract metadata without loading full file
             metadata = {}
             try:
-                if filename.endswith(".json.gz"):
-                    with gzip.open(filepath, "rt", encoding="utf-8") as f:
-                        data = json.load(f)
-                else:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        # Read only first few KB to get metadata
-                        content = f.read(8192)
-                        # Try to parse metadata section
-                        try:
-                            data = json.loads(content + '}}')  # Attempt partial parse
-                        except json.JSONDecodeError:
-                            data = json.load(open(filepath, "r", encoding="utf-8"))
+                data = self._load_backup(filepath)
                 if "metadata" in data:
                     metadata = data["metadata"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[BACKUP] Failed to read metadata from {filename}: {e}")
 
             backups.append({
                 "filename": filename,
@@ -260,6 +279,18 @@ class RedisBackupService:
         # Sort by modified date DESC
         backups.sort(key=lambda b: b["modified_at"], reverse=True)
         return backups
+
+    def delete_backup(self, filename: str) -> Dict[str, Any]:
+        """Delete a backup file from disk after validating the filename."""
+        filepath = self._resolve_filepath(filename)
+        file_size = os.path.getsize(filepath)
+        os.remove(filepath)
+        logger.info(f"[BACKUP] Deleted backup file: {filename}")
+        return {
+            "status": "success",
+            "filename": filename,
+            "deleted_bytes": file_size
+        }
 
     # ─────────────────────────── PREVIEW ───────────────────────────
 
@@ -481,19 +512,27 @@ class RedisBackupService:
         Find tenants that exist in backups but not in live Redis.
         These are recoverable deleted tenants.
         """
-        r = self._get_redis()
-        
-        # Get live tenant IDs from Redis
         live_tenants = set()
-        cursor = 0
-        while True:
-            cursor, keys = r.scan(cursor=cursor, match="tenant:*", count=500)
-            for key in keys:
-                parts = self._safe_decode(key).split(":")
-                if len(parts) >= 2:
-                    live_tenants.add(parts[1])
-            if cursor == 0:
-                break
+        live_status = "available"
+        live_error = None
+
+        try:
+            r = self._get_redis()
+
+            # Get live tenant IDs from Redis
+            cursor = 0
+            while True:
+                cursor, keys = r.scan(cursor=cursor, match="tenant:*", count=500)
+                for key in keys:
+                    parts = self._safe_decode(key).split(":")
+                    if len(parts) >= 2:
+                        live_tenants.add(parts[1])
+                if cursor == 0:
+                    break
+        except RuntimeError as e:
+            live_status = "unavailable"
+            live_error = str(e)
+            logger.warning(f"[DELETED-TENANTS] Redis unavailable; returning backup-only tenant data: {e}")
 
         # Get tenant IDs from all backups
         backup_tenants = {}
@@ -509,11 +548,13 @@ class RedisBackupService:
         # Find deleted tenants (in backups but not live)
         deleted = []
         for tid, available_backups in backup_tenants.items():
-            if tid not in live_tenants:
+            if live_status == "unavailable" or tid not in live_tenants:
                 deleted.append({
                     "tenant_id": tid,
                     "available_in_backups": available_backups,
-                    "backup_count": len(available_backups)
+                    "backup_count": len(available_backups),
+                    "live_status": live_status,
+                    "live_error": live_error
                 })
 
         return deleted

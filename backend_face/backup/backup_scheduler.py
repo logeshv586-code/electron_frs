@@ -213,3 +213,19 @@ class BackupScheduler:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             return []
+
+    def clear_logs(self) -> Dict[str, Any]:
+        """Remove all backup log entries."""
+        cleared_count = len(self.get_logs())
+        try:
+            with open(self._log_file, "w", encoding="utf-8") as f:
+                f.write("[]")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Failed to clear logs: {e}")
+            raise
+
+        logger.info(f"[SCHEDULER] Cleared {cleared_count} backup log entries")
+        return {
+            "status": "success",
+            "cleared_count": cleared_count
+        }

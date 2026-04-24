@@ -4,9 +4,8 @@ Backup API Routes
 SuperAdmin-only endpoints for Redis backup management.
 """
 
-import os
 import logging
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -25,16 +24,7 @@ def _get_service():
     global _backup_service
     if _backup_service is None:
         from .backup_service import RedisBackupService
-        redis_host = os.getenv("REDIS_HOST", "localhost")
-        redis_port = int(os.getenv("REDIS_PORT", "6379"))
-        redis_password = os.getenv("REDIS_PASSWORD", None)
-        redis_db = int(os.getenv("REDIS_DB", "0"))
-        _backup_service = RedisBackupService(
-            redis_host=redis_host,
-            redis_port=redis_port,
-            redis_password=redis_password,
-            redis_db=redis_db
-        )
+        _backup_service = RedisBackupService()
     return _backup_service
 
 
@@ -144,6 +134,43 @@ async def download_backup(request: Request, filename: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"[BACKUP-API] Download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────── DELETE BACKUP ───────────────────────────
+
+@router.delete("/delete/{filename}")
+async def delete_backup(request: Request, filename: str):
+    """Delete a specific backup file from disk."""
+    user = _require_admin_or_superadmin(request)
+    try:
+        service = _get_service()
+        if user.get("role") == "Admin":
+            backups = service.list_backups()
+            binfo = next((b for b in backups if b.get("filename") == filename), None)
+            if not binfo or user.get("company_id") not in binfo.get("tenant_ids", []):
+                raise HTTPException(status_code=403, detail="Access denied")
+
+        result = service.delete_backup(filename)
+
+        scheduler = _get_scheduler()
+        scheduler.log_manual_action("delete_backup", user.get("username", "unknown"), {
+            "filename": filename,
+            "deleted_bytes": result.get("deleted_bytes"),
+            "tenant_id": user.get("company_id") if user.get("role") == "Admin" else None
+        })
+
+        return result
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Backup file not found: {filename}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[BACKUP-API] Delete error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -291,6 +318,18 @@ async def get_backup_logs(request: Request):
         return {"logs": logs, "total": len(logs)}
     except Exception as e:
         logger.error(f"[BACKUP-API] Logs error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/logs")
+async def clear_backup_logs(request: Request):
+    """Clear all backup audit logs."""
+    _require_admin_or_superadmin(request)
+    try:
+        scheduler = _get_scheduler()
+        return scheduler.clear_logs()
+    except Exception as e:
+        logger.error(f"[BACKUP-API] Clear logs error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

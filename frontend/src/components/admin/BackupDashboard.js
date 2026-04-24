@@ -36,6 +36,7 @@ const BackupDashboard = () => {
   const [statusMessage, setStatusMessage] = useState(null); // { type, text }
   const [previewData, setPreviewData] = useState(null);
   const [restoreConfirm, setRestoreConfirm] = useState(null); // { type, filename, tenantId }
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [restoreOverwrite, setRestoreOverwrite] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [tenantIdInput, setTenantIdInput] = useState('');
@@ -69,8 +70,15 @@ const BackupDashboard = () => {
     try {
       const res = await axios.get(`${BACKUP_API}/deleted-tenants`, { headers });
       setDeletedTenants(res.data.deleted_tenants || []);
+      const redisUnavailable = (res.data.deleted_tenants || []).some(t => t.live_status === 'unavailable');
+      if (redisUnavailable) {
+        setStatusMessage({
+          type: 'info',
+          text: 'Redis is unavailable, so deleted tenant status is based on backup files only.'
+        });
+      }
     } catch (err) {
-      console.error('Failed to load deleted tenants', err);
+      setStatusMessage({ type: 'error', text: 'Failed to load deleted tenants: ' + (err.response?.data?.detail || err.message) });
     }
   }, [token]);
 
@@ -104,7 +112,7 @@ const BackupDashboard = () => {
 
   const handleDownload = async (filename) => {
     try {
-      const res = await axios.get(`${BACKUP_API}/download/${filename}`, {
+      const res = await axios.get(`${BACKUP_API}/download/${encodeURIComponent(filename)}`, {
         headers,
         responseType: 'blob'
       });
@@ -123,10 +131,22 @@ const BackupDashboard = () => {
 
   const handlePreview = async (filename) => {
     try {
-      const res = await axios.get(`${BACKUP_API}/preview/${filename}`, { headers });
+      const res = await axios.get(`${BACKUP_API}/preview/${encodeURIComponent(filename)}`, { headers });
       setPreviewData(res.data);
     } catch (err) {
       setStatusMessage({ type: 'error', text: 'Preview failed: ' + (err.response?.data?.detail || err.message) });
+    }
+  };
+
+  const handleDeleteBackup = async () => {
+    if (!deleteConfirm) return;
+    try {
+      await axios.delete(`${BACKUP_API}/delete/${encodeURIComponent(deleteConfirm.filename)}`, { headers });
+      setStatusMessage({ type: 'success', text: `Deleted backup: ${deleteConfirm.filename}` });
+      setDeleteConfirm(null);
+      fetchBackups();
+    } catch (err) {
+      setStatusMessage({ type: 'error', text: 'Delete failed: ' + (err.response?.data?.detail || err.message) });
     }
   };
 
@@ -165,6 +185,21 @@ const BackupDashboard = () => {
       fetchBackups();
     } catch (err) {
       setStatusMessage({ type: 'error', text: 'Retention failed: ' + (err.response?.data?.detail || err.message) });
+    }
+  };
+
+  const handleClearLogs = async () => {
+    if (!window.confirm('Clear all backup audit logs? This cannot be undone.')) return;
+
+    try {
+      const res = await axios.delete(`${BACKUP_API}/logs`, { headers });
+      setLogs([]);
+      setStatusMessage({
+        type: 'success',
+        text: `Cleared ${res.data.cleared_count || 0} audit log(s)`
+      });
+    } catch (err) {
+      setStatusMessage({ type: 'error', text: 'Clear logs failed: ' + (err.response?.data?.detail || err.message) });
     }
   };
 
@@ -234,6 +269,13 @@ const BackupDashboard = () => {
                     >
                       <RotateCcw size={14} />
                     </button>
+                    <button
+                      className="btn-icon-sm danger"
+                      title="Delete Backup"
+                      onClick={() => setDeleteConfirm({ filename: b.filename })}
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -290,7 +332,12 @@ const BackupDashboard = () => {
     <div className="backup-card">
       <div className="backup-card-header">
         <h3><Clock size={18} /> Backup Audit Logs</h3>
-        <button className="btn-icon-sm" onClick={fetchLogs} title="Refresh"><RefreshCw size={14} /></button>
+        <div className="backup-actions">
+          <button className="btn-icon-sm" onClick={fetchLogs} title="Refresh"><RefreshCw size={14} /></button>
+          <button className="btn-icon-sm danger" onClick={handleClearLogs} title="Clear Logs" disabled={logs.length === 0}>
+            <Trash2 size={14} />
+          </button>
+        </div>
       </div>
       <div className="backup-card-body">
         {logs.length === 0 ? (
@@ -344,6 +391,9 @@ const BackupDashboard = () => {
               <div className="deleted-tenant-info">
                 <h4>Tenant: {t.tenant_id}</h4>
                 <p>Available in {t.backup_count} backup(s): {t.available_in_backups?.map(b => b.filename).join(', ')}</p>
+                {t.live_status === 'unavailable' && (
+                  <p style={{ color: '#f59e0b' }}>Redis unavailable; showing backup-only tenant recovery data.</p>
+                )}
               </div>
               <button
                 className="btn-restore-sm"
@@ -533,6 +583,30 @@ const BackupDashboard = () => {
               <button className="btn-confirm-restore" onClick={handleRestore} disabled={restoreLoading}>
                 {restoreLoading ? <div className="backup-spinner" style={{ width: 16, height: 16 }}></div> : <RotateCcw size={16} />}
                 {restoreLoading ? 'Restoring...' : 'Confirm Restore'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && createPortal(
+        <div className="restore-confirm-overlay">
+          <div className="restore-confirm-modal">
+            <div className="warning-icon">
+              <AlertTriangle size={28} />
+            </div>
+            <h3>Delete Backup</h3>
+            <p>
+              This will permanently delete "{deleteConfirm.filename}" from backup storage. Restores from this file will no longer be available.
+            </p>
+            <div className="restore-confirm-actions">
+              <button className="btn-cancel" onClick={() => setDeleteConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn-confirm-restore" onClick={handleDeleteBackup}>
+                <Trash2 size={16} /> Delete Backup
               </button>
             </div>
           </div>

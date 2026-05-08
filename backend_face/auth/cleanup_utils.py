@@ -196,6 +196,24 @@ def cleanup_company_data(company_id: str):
             cameras = load_json(cameras_file, [])
             if isinstance(cameras, list):
                 original_count = len(cameras)
+                
+                # Identify cameras to delete and stop their active streams
+                cameras_to_delete = [c for c in cameras if isinstance(c, dict) and c.get("company_id") == company_id]
+                if cameras_to_delete:
+                    try:
+                        import sys
+                        from camera_management.streaming import get_stream_manager
+                        stream_manager = get_stream_manager()
+                        for cam in cameras_to_delete:
+                            cam_id = cam.get("id")
+                            if cam_id:
+                                stream_id = stream_manager.get_camera_stream(cam_id)
+                                if stream_id:
+                                    stream_manager.stop_stream(stream_id)
+                                    logger.info(f"Stopped stream for deleted camera {cam_id}")
+                    except Exception as stream_error:
+                        logger.error(f"Failed to stop streams for deleted company {company_id}: {stream_error}")
+
                 cameras = [c for c in cameras if not (isinstance(c, dict) and c.get("company_id") == company_id)]
                 if len(cameras) < original_count:
                     atomic_write_json(cameras_file, cameras)

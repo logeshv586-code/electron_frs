@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import Dict, List, Optional
 import os
+
+# Force CPU for TensorFlow to avoid DNN stream errors on GPU/CPU mismatch
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 import json
 import cv2
 import pandas as pd

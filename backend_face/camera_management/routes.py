@@ -38,10 +38,15 @@ def get_recording_service() -> CameraRecordingManager:
 @router.post("/validate-camera", response_model=CameraValidationResponse)
 async def validate_camera(
     request: CameraValidationRequest,
+    request_obj: Request,
     service: EnhancedCameraService = Depends(get_camera_service)
 ):
     """Validate camera data including duplicate checking"""
     try:
+        current_user = request_obj.scope.get("user", {})
+        if current_user.get("role") != "SuperAdmin":
+            request.company_id = current_user.get("company_id")
+            
         return service.validate_camera(request)
     except Exception as e:
         logger.error(f"Error validating camera: {e}")

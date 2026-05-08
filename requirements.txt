@@ -2,7 +2,7 @@ fastapi==0.116.1
 uvicorn==0.34.0
 pydantic==2.10.6
 opencv-python
-numpy==2.2.6
+numpy==1.26.4
 python-multipart
 face-recognition
 insightface
@@ -43,3 +43,8 @@ uvloop; platform_system != 'Windows'
 watchfiles
 websockets
 redis
+setuptools
+xhtml2pdf 
+PyQt6
+ultralytics
+opencv-python

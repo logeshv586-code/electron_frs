@@ -120,6 +120,10 @@ class EnhancedCameraService:
             # Check for duplicate IP/index (excluding specified IP if editing)
             cameras = self._load_cameras()
             for camera in cameras:
+                # Allow duplicate IP if they belong to different companies (or one is global/legacy)
+                if request.company_id != camera.company_id:
+                    continue
+
                 camera_ip = extract_ip_from_url(camera.rtsp_url) or camera.rtsp_url
                 if camera_ip == request.ip and camera_ip != request.exclude_ip:
                     collections = self._load_collections()
@@ -165,7 +169,8 @@ class EnhancedCameraService:
             validation_request = CameraValidationRequest(
                 ip=ip_address,
                 streamUrl=request.rtsp_url,
-                collection_name=request.collection_id
+                collection_name=request.collection_id,
+                company_id=request.company_id
             )
             validation = self.validate_camera(validation_request)
             if not validation.valid:
@@ -177,6 +182,33 @@ class EnhancedCameraService:
             if request.collection_id:
                 collection = next((c for c in collections if c.id == request.collection_id), None)
                 collection_name = collection.name if collection else None
+
+            # Check license limits
+            if request.company_id:
+                try:
+                    import sys
+                    from auth.users import get_users
+                    users = get_users()
+                    admin_limit = 0
+                    for u in users.values():
+                        if u.get("company_id") == request.company_id and u.get("role") == "Admin":
+                            limit = u.get("max_cameras_limit", 0)
+                            if limit > admin_limit:
+                                admin_limit = limit
+                    
+                    if admin_limit > 0:
+                        company_cameras_count = sum(1 for c in cameras if c.company_id == request.company_id)
+                        if company_cameras_count >= admin_limit:
+                            raise HTTPException(
+                                status_code=403, 
+                                detail=f"License limit reached. Your company can only add up to {admin_limit} cameras."
+                            )
+                except ImportError:
+                    logger.warning("Could not import get_users to check license limit")
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error checking camera limits: {e}")
             
             # Create camera
             new_camera = EnhancedCamera(
@@ -401,7 +433,8 @@ class EnhancedCameraService:
                     validation_request = CameraValidationRequest(
                         ip=new_ip,
                         streamUrl=request.rtsp_url,
-                        exclude_ip=camera.ip_address
+                        exclude_ip=camera.ip_address,
+                        company_id=camera.company_id
                     )
                     validation = self.validate_camera(validation_request)
                     if not validation.valid:

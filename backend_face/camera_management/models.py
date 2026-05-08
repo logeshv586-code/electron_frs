@@ -39,6 +39,7 @@ class CameraValidationRequest(BaseModel):
     streamUrl: str
     collection_name: Optional[str] = None
     exclude_ip: Optional[str] = None
+    company_id: Optional[str] = None
 
 class CameraValidationResponse(BaseModel):
     valid: bool

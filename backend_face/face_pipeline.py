@@ -24,7 +24,7 @@ from save_face import save_face_image
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────── Tuning constants ──────────────────────────────────
+# ----------------------- Tuning constants ----------------------------------
 TOLERANCE = 0.50          # base face_recognition distance threshold
 LONG_RANGE_TOLERANCE = 0.58
 LONG_RANGE_FACE_PX = 72
@@ -33,22 +33,22 @@ MATCH_MARGIN = 0.025
 MIN_SAVE_INTERVAL = 5.0   # seconds between saves for same label
 UNKNOWN_MIN_SAVE_INTERVAL = 12.0
 
-# ── Long-distance detection ─────────────────────────────────────────────────
+# -- Long-distance detection -------------------------------------------------
 #   The primary long-distance mechanism is the elevated det_size=(1280,1280)
-#   passed to InsightFace at init time. This alone ~4× the effective resolution.
+#   passed to InsightFace at init time. This alone ~4* the effective resolution.
 #   MIN_FACE_PX is lowered so small/distant detections are not filtered out.
-MIN_FACE_PX = 20          # absolute minimum face size in pixels (was 50–60)
+MIN_FACE_PX = 20          # absolute minimum face size in pixels (was 50-60)
 
 #   Upscale small face crops to this size before encoding (improves accuracy)
 ENCODING_MIN_SIZE = 128   # px; insightface & dlib work best >=112
 ENCODING_MAX_SIZE = 224   # don't upscale beyond this to stay fast
 
-# ── Tracking ────────────────────────────────────────────────────────────────
+# -- Tracking ----------------------------------------------------------------
 IOU_THRESHOLD        = 0.22
 MAX_TRACK_AGE_FRAMES = 12
 MAX_TRACK_AGE_SECONDS = 0.75
 BEST_QUALITY_RESET_SECONDS = 30.0
-# ───────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 # Singletons / shared state
 face_apps: Dict[int, Any] = {}
@@ -72,12 +72,12 @@ tracking_lock = threading.Lock()
 
 best_face_quality: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 #   UTILITY HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def _apply_clahe(bgr: np.ndarray) -> np.ndarray:
-    """Contrast Limited Adaptive Histogram Equalisation – helps dull/far cameras."""
+    """Contrast Limited Adaptive Histogram Equalisation - helps dull/far cameras."""
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -327,6 +327,11 @@ def _center_distance(b1: Tuple, b2: Tuple) -> float:
 
 
 def _is_same_face_box(b1: Tuple, b2: Tuple) -> bool:
+    """Check if two bounding boxes represent the SAME face.
+    Made strict to avoid merging distinct people in crowds."""
+    iou = _calculate_iou(b1, b2)
+    overlap = _overlap_ratio(b1, b2)
+    center_dist = _center_distance(b1, b2)
     max_dim = max(
         b1[2] - b1[0],
         b1[3] - b1[1],
@@ -334,14 +339,24 @@ def _is_same_face_box(b1: Tuple, b2: Tuple) -> bool:
         b2[3] - b2[1],
         1,
     )
-    return (
-        _calculate_iou(b1, b2) >= IOU_THRESHOLD
-        or _overlap_ratio(b1, b2) >= 0.42
-        or _center_distance(b1, b2) <= max_dim * 0.55
-    )
+
+    # High IOU means essentially the same box
+    if iou >= 0.45:
+        return True
+
+    # Very high overlap on the smaller box
+    if overlap >= 0.65:
+        return True
+
+    # Centers very close AND significant overlap (same face shifted slightly)
+    if center_dist <= max_dim * 0.3 and iou >= 0.15:
+        return True
+
+    return False
 
 
 def _dedupe_detections(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove duplicate detections. Keeps distinct faces even in crowds."""
     def score(item: Dict[str, Any]) -> Tuple[int, float, float]:
         bbox = item.get("bbox") or (0, 0, 0, 0)
         is_known = 1 if item.get("name") != "Unknown" else 0
@@ -359,7 +374,7 @@ def _dedupe_detections(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _calculate_face_quality(crop_bgr: np.ndarray, det_conf: float = 0.0) -> float:
-    """Score 0–1: sharpness × size × confidence."""
+    """Score 0-1: sharpness * size * confidence."""
     if crop_bgr is None or crop_bgr.size == 0:
         return 0.0
     h, w  = crop_bgr.shape[:2]
@@ -370,16 +385,70 @@ def _calculate_face_quality(crop_bgr: np.ndarray, det_conf: float = 0.0) -> floa
     return float(np.clip(sharp * 0.5 + size * 0.25 + conf * 0.25, 0, 1))
 
 
-def _extract_face_crop(frame: np.ndarray, bbox: Tuple, padding: float = 0.3) -> Optional[np.ndarray]:
+def _extract_face_crop(
+    frame: np.ndarray,
+    bbox: Tuple,
+    padding: float = 0.3,
+    nearby_bboxes: Optional[List[Tuple]] = None,
+) -> Optional[np.ndarray]:
+    """Extract a face crop with adaptive padding, crowd-aware clipping.
+
+    When nearby_bboxes are provided (crowd scenario), the padding is
+    automatically reduced on sides where another face is close, so the
+    saved crop does not include neighbouring people.
+    """
     if frame is None or frame.size == 0:
         return None
     H, W  = frame.shape[:2]
     x1, y1, x2, y2 = bbox
-    pw    = int((x2 - x1) * padding)
-    ph    = int((y2 - y1) * padding)
-    crop  = frame[max(0, y1 - ph):min(H, y2 + ph),
-                  max(0, x1 - pw):min(W, x2 + pw)].copy()
-    if crop.size == 0 or crop.shape[0] < MIN_FACE_PX or crop.shape[1] < MIN_FACE_PX:
+    face_w = x2 - x1
+    face_h = y2 - y1
+    min_side = min(face_w, face_h)
+
+    # Adaptive padding: small/distant faces get much more context
+    if min_side < 40:
+        padding = max(padding, 0.7)
+    elif min_side < 80:
+        padding = max(padding, 0.5)
+
+    pw = int(face_w * padding)
+    ph = int(face_h * padding)
+
+    # Default expanded region
+    crop_x1 = max(0, x1 - pw)
+    crop_y1 = max(0, y1 - ph)
+    crop_x2 = min(W, x2 + pw)
+    crop_y2 = min(H, y2 + ph)
+
+    # Crowd-aware clipping: shrink padding where other faces are nearby
+    if nearby_bboxes:
+        for nb in nearby_bboxes:
+            nx1, ny1, nx2, ny2 = nb
+            # Skip self
+            if nx1 == x1 and ny1 == y1 and nx2 == x2 and ny2 == y2:
+                continue
+            # Only clip if neighbouring face is close (within 2x padding)
+            # Left neighbour
+            if nx2 > crop_x1 and nx2 <= x1 and nx1 < x1:
+                crop_x1 = max(crop_x1, nx2)
+            # Right neighbour
+            if nx1 < crop_x2 and nx1 >= x2 and nx2 > x2:
+                crop_x2 = min(crop_x2, nx1)
+            # Top neighbour
+            if ny2 > crop_y1 and ny2 <= y1 and ny1 < y1:
+                crop_y1 = max(crop_y1, ny2)
+            # Bottom neighbour
+            if ny1 < crop_y2 and ny1 >= y2 and ny2 > y2:
+                crop_y2 = min(crop_y2, ny1)
+
+    # Ensure we at least keep the face bbox itself
+    crop_x1 = min(crop_x1, x1)
+    crop_y1 = min(crop_y1, y1)
+    crop_x2 = max(crop_x2, x2)
+    crop_y2 = max(crop_y2, y2)
+
+    crop = frame[crop_y1:crop_y2, crop_x1:crop_x2].copy()
+    if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
         return None
     return crop
 
@@ -421,9 +490,9 @@ def get_runtime_profile() -> Dict[str, Any]:
     return dict(runtime_profile)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 #   INITIALISATION
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def check_gpu_availability() -> List[int]:
     available = []
@@ -502,7 +571,7 @@ def init(data_dir: str,
     data_directory = data_dir
 
     try:
-        from fr1 import load_known_faces  # noqa: F401 – just validate importability
+        from fr1 import load_known_faces  # noqa: F401 - just validate importability
     except Exception as e:
         raise ImportError("Cannot import load_known_faces from fr1.py") from e
 
@@ -566,9 +635,9 @@ def init(data_dir: str,
         available_gpus.append(runtime_profile["ctx"])
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 #   EMBEDDING MANAGEMENT
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def clear_company_embeddings_cache(company_id: str) -> None:
     with embedding_lock:
@@ -602,9 +671,9 @@ def _get_face_app_for_stream(stream_id: Optional[str] = None):
     return face_apps[available_gpus[0]] if available_gpus else globals().get('face_app')
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 #   TRACKING HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def _match_detection_to_track(bbox: Tuple, tracks: Dict) -> Optional[int]:
     best_score, best_id = 0.0, None
@@ -630,9 +699,9 @@ def _cleanup_old_tracks(stream_id: str, frame_count: int, now: float):
         del tracks[tid]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 #   MAIN PROCESS FRAME  (long-distance aware, single-pass for speed)
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def process_frame(frame_bgr: np.ndarray,
                   force_process: bool = False,
@@ -645,7 +714,7 @@ def process_frame(frame_bgr: np.ndarray,
     Long-distance strategy (fast single-pass)
     ------------------------------------------
     1. Apply CLAHE contrast enhancement to the full frame
-    2. Run InsightFace SCRFD once at det_size=(1280,1280) — this already
+    2. Run InsightFace SCRFD once at det_size=(1280,1280) -- this already
        quadruples effective resolution vs the old (640,640)
     3. Accept faces down to MIN_FACE_PX (20 px)
     4. Upscale small crops via Lanczos4 + unsharp mask before encoding
@@ -660,12 +729,12 @@ def process_frame(frame_bgr: np.ndarray,
     if frame_bgr is None:
         return frame_bgr, []
 
-    # ── Per-stream init ──────────────────────────────────────────────────
+    # -- Per-stream init --------------------------------------------------
     if stream_id:
         person_tracking.setdefault(stream_id, {})
         track_id_counter.setdefault(stream_id, 0)
 
-    # ── Resolve company / embeddings ─────────────────────────────────────
+    # -- Resolve company / embeddings -------------------------------------
     if company_id is None and stream_id:
         try:
             from camera_management.streaming import get_stream_manager
@@ -681,7 +750,7 @@ def process_frame(frame_bgr: np.ndarray,
     known_enc   = emb.get("encodings", [])
     known_names = emb.get("names", [])
 
-    # ── Frame counter / periodic track cleanup ───────────────────────────
+    # -- Frame counter / periodic track cleanup ---------------------------
     now = time.time()
     _fc_key = f"{stream_id}_fc"
     if not hasattr(process_frame, '_fc'):
@@ -693,10 +762,10 @@ def process_frame(frame_bgr: np.ndarray,
         with tracking_lock:
             _cleanup_old_tracks(stream_id, cur_fc, now)
 
-    # ────────────────────────────────────────────────────────────────────
-    #  STEP 1 – Single-pass detection with CLAHE enhancement
+    # --------------------------------------------------------------------
+    #  STEP 1 - Single-pass detection with CLAHE enhancement
     #  The elevated det_size=(1280,1280) already handles long-distance.
-    # ────────────────────────────────────────────────────────────────────
+    # --------------------------------------------------------------------
     orig_h, orig_w = frame_bgr.shape[:2]
 
     # Apply CLAHE to boost contrast for outdoor/far cameras
@@ -712,8 +781,27 @@ def process_frame(frame_bgr: np.ndarray,
     tracks = person_tracking.get(stream_id, {}) if stream_id else {}
     detections: List[Dict[str, Any]] = []
 
+    # Pre-collect ALL valid face bboxes for crowd-aware crop clipping.
+    # When saving each face, we pass the full list so that crop padding
+    # is reduced on sides where another face is close.
+    all_face_bboxes: List[Tuple[int, int, int, int]] = []
     for f in faces:
-        # ── Parse bbox ───────────────────────────────────────────────────
+        try:
+            bx1, by1, bx2, by2 = map(int, f.bbox[:4])
+        except Exception:
+            bbox_raw = getattr(f, 'bbox', None)
+            if bbox_raw is None or len(bbox_raw) < 4:
+                continue
+            bx1, by1, bx2, by2 = int(bbox_raw[0]), int(bbox_raw[1]), int(bbox_raw[2]), int(bbox_raw[3])
+        ax1 = max(0, min(orig_w - 1, bx1))
+        ay1 = max(0, min(orig_h - 1, by1))
+        ax2 = max(0, min(orig_w - 1, bx2))
+        ay2 = max(0, min(orig_h - 1, by2))
+        if (ax2 - ax1) >= MIN_FACE_PX and (ay2 - ay1) >= MIN_FACE_PX:
+            all_face_bboxes.append((ax1, ay1, ax2, ay2))
+
+    for f in faces:
+        # -- Parse bbox ---------------------------------------------------
         try:
             bx1, by1, bx2, by2 = map(int, f.bbox[:4])
         except Exception:
@@ -732,13 +820,13 @@ def process_frame(frame_bgr: np.ndarray,
 
         fw, fh = x2 - x1, y2 - y1
 
-        # ── Accept faces down to MIN_FACE_PX (long-distance) ────────────
+        # -- Accept faces down to MIN_FACE_PX (long-distance) ------------
         if fw < MIN_FACE_PX or fh < MIN_FACE_PX:
             continue
 
         current_bbox = (x1, y1, x2, y2)
 
-        # ── Crop + upscale for encoding ──────────────────────────────────
+        # -- Crop + upscale for encoding ----------------------------------
         face_crop_bgr = frame_bgr[y1:y2, x1:x2]
         if face_crop_bgr.size == 0:
             continue
@@ -749,8 +837,8 @@ def process_frame(frame_bgr: np.ndarray,
             if len(known_enc) > 0 else []
         )
 
-        # ── Encoding ─────────────────────────────────────────────────────
-        # ── Track matching ───────────────────────────────────────────────
+        # -- Encoding -----------------------------------------------------
+        # -- Track matching -----------------------------------------------
         matched_tid    = None
         persisted_name = None
         if stream_id and tracks:
@@ -763,7 +851,7 @@ def process_frame(frame_bgr: np.ndarray,
         conf = 0.0
         face_encoding = None
 
-        # ── Recognition ──────────────────────────────────────────────────
+        # -- Recognition --------------------------------------------------
         matched_name, matched_conf, matched_encoding, _ = _match_known_face(
             candidate_encodings,
             known_enc,
@@ -778,7 +866,7 @@ def process_frame(frame_bgr: np.ndarray,
         else:
             conf = det_conf
 
-        # ── Update tracking ───────────────────────────────────────────────
+        # -- Update tracking -----------------------------------------------
         if stream_id:
             with tracking_lock:
                 if matched_tid is None:
@@ -799,7 +887,7 @@ def process_frame(frame_bgr: np.ndarray,
                     if face_encoding is not None:
                         t['encoding'] = face_encoding
 
-        # ── Save decision (quality-gated) ─────────────────────────────────
+        # -- Save decision (quality-gated) ---------------------------------
         quality      = _calculate_face_quality(face_crop_bgr, det_conf)
         person_key   = f"{name}_{matched_tid}" if name != "Unknown" else f"Unknown_{matched_tid}"
         should_save  = False
@@ -844,7 +932,20 @@ def process_frame(frame_bgr: np.ndarray,
                     best_frame = None
 
             save_frame = best_frame if best_frame is not None else frame_bgr
-            padded = _extract_face_crop(save_frame, current_bbox, padding=0.32)
+            # Use larger padding for small/distant faces to capture more context
+            save_padding = 0.4
+            if min_side < 30:
+                save_padding = 0.9
+            elif min_side < 50:
+                save_padding = 0.7
+            elif min_side < 80:
+                save_padding = 0.55
+            # Pass all detected face bboxes for crowd-aware crop clipping
+            padded = _extract_face_crop(
+                save_frame, current_bbox,
+                padding=save_padding,
+                nearby_bboxes=all_face_bboxes if len(all_face_bboxes) > 1 else None,
+            )
             if padded is None:
                 padded = face_crop_bgr
             padded_copy = padded.copy()
@@ -869,9 +970,9 @@ def process_frame(frame_bgr: np.ndarray,
                         confidence=conf,
                         min_interval=save_interval,
                         source="stream",
-                        jpeg_quality=95,
-                        target_width=224,
-                        max_upscale=4.0,
+                        jpeg_quality=98,
+                        target_width=320,
+                        max_upscale=6.0,
                         camera_name=camera_name_to_save,
                         company_id=company_id_to_save,
                         identity_key=person_key,
@@ -888,7 +989,7 @@ def process_frame(frame_bgr: np.ndarray,
             "face_size_px": (fw, fh),   # useful for debugging distance
         })
 
-    # ── Return active tracked persons (persistence for UI) ────────────────
+    # -- Return active tracked persons (persistence for UI) ----------------
     if stream_id:
         active = []
         with tracking_lock:
@@ -911,15 +1012,15 @@ def process_frame(frame_bgr: np.ndarray,
     return frame_bgr, _dedupe_detections(detections)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 #   BOUNDING BOX RENDERER
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def render_bounding_boxes(frame: np.ndarray,
                            detections: List[Dict[str, Any]],
                            show_bounding_box: bool = True) -> np.ndarray:
     """
-    Draw bounding boxes.  Purely cosmetic – does not affect detection/saving.
+    Draw bounding boxes.  Purely cosmetic - does not affect detection/saving.
     Shows face size for unknown faces (useful for verifying long-distance detections).
     """
     if not show_bounding_box or not detections:
@@ -941,10 +1042,10 @@ def render_bounding_boxes(frame: np.ndarray,
         x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
         color  = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
 
-        # ── Box ──────────────────────────────────────────────────────────
+        # -- Box ----------------------------------------------------------
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, box_thick)
 
-        # ── Label ────────────────────────────────────────────────────────
+        # -- Label --------------------------------------------------------
         label = name
         fx, fy = det.get("face_size_px", (0, 0))
         if show_size and fx > 0 and fy > 0:

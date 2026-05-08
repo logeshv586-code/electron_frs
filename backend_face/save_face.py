@@ -155,18 +155,142 @@ def _append_log(row: dict):
         logger.error(f"Failed to write capture log: {e}")
 
 
+# ===========================================================================
+#   IMAGE ENHANCEMENT PIPELINE
+# ===========================================================================
+
 def _enhance_face_crop(face_crop_bgr: np.ndarray) -> np.ndarray:
+    """CLAHE + unsharp mask for normal-sized face crops (>100px)."""
     if face_crop_bgr is None or face_crop_bgr.size == 0:
         return face_crop_bgr
     try:
+        # CLAHE on L channel for contrast
         lab = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         enhanced = cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
-        blurred = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=0.8)
-        return cv2.addWeighted(enhanced, 1.35, blurred, -0.35, 0)
+        # Unsharp mask for sharpness
+        blur = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=1.0)
+        sharpened = cv2.addWeighted(enhanced, 1.5, blur, -0.5, 0)
+        return sharpened
     except Exception:
         return face_crop_bgr
+
+
+def _pre_upscale_denoise(img: np.ndarray, min_side: int) -> np.ndarray:
+    """
+    Denoise BEFORE upscaling so noise does not get amplified.
+    Stronger denoising for smaller (noisier) crops.
+    """
+    if img is None or img.size == 0:
+        return img
+    try:
+        if min_side < 40:
+            # Very small crop - heavy denoise with non-local means
+            return cv2.fastNlMeansDenoisingColored(
+                img, None, h=10, hForColorComponents=10,
+                templateWindowSize=7, searchWindowSize=21
+            )
+        elif min_side < 80:
+            # Small crop - moderate edge-preserving denoise
+            return cv2.bilateralFilter(img, d=9, sigmaColor=55, sigmaSpace=55)
+        else:
+            # Normal crop - light denoise
+            return cv2.bilateralFilter(img, d=5, sigmaColor=30, sigmaSpace=30)
+    except Exception:
+        return img
+
+
+def _iterative_upscale(img: np.ndarray, target_size: int, max_scale: float) -> np.ndarray:
+    """
+    Upscale in 2x steps with intermediate sharpening at each step.
+    This produces MUCH cleaner results than a single large jump because
+    each step only doubles, keeping detail crisp at every stage.
+    """
+    h, w = img.shape[:2]
+    min_dim = min(h, w)
+    if min_dim >= target_size:
+        return img
+
+    total_scale = min(float(target_size) / float(min_dim), max_scale)
+    if total_scale <= 1.0:
+        return img
+
+    result = img.copy()
+    accumulated_scale = 1.0
+    step_scale = 2.0  # upscale 2x per step
+
+    while accumulated_scale * step_scale <= total_scale:
+        cur_h, cur_w = result.shape[:2]
+        new_w = int(cur_w * step_scale)
+        new_h = int(cur_h * step_scale)
+
+        # Upscale with Lanczos4 (sharpest interpolation for upscaling)
+        result = cv2.resize(result, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+        # Sharpen after each 2x step to recover edges before next step
+        blur = cv2.GaussianBlur(result, (0, 0), sigmaX=0.8)
+        result = cv2.addWeighted(result, 1.4, blur, -0.4, 0)
+
+        accumulated_scale *= step_scale
+
+    # Final fractional upscale for the remainder
+    remaining = total_scale / accumulated_scale
+    if remaining > 1.05:
+        cur_h, cur_w = result.shape[:2]
+        new_w = max(1, int(cur_w * remaining))
+        new_h = max(1, int(cur_h * remaining))
+        result = cv2.resize(result, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+        # Lighter sharpen for the small final step
+        blur = cv2.GaussianBlur(result, (0, 0), sigmaX=0.7)
+        result = cv2.addWeighted(result, 1.3, blur, -0.3, 0)
+
+    return result
+
+
+def _super_enhance_small_face(face_crop_bgr: np.ndarray) -> np.ndarray:
+    """
+    Aggressive enhancement for small / distant face crops.
+    Applied AFTER upscaling to maximize detail recovery.
+    Pipeline:
+      1. Bilateral filter - edge-preserving denoise on upscaled image
+      2. CLAHE - recover facial features in low contrast
+      3. Saturation + brightness boost - fix washed-out distant captures
+      4. Multi-scale unsharp mask - restore fine and coarse detail
+      5. Non-local-means denoise - final artifact cleanup
+    """
+    if face_crop_bgr is None or face_crop_bgr.size == 0:
+        return face_crop_bgr
+    try:
+        # 1. Bilateral filter (denoise while keeping edges crisp)
+        denoised = cv2.bilateralFilter(face_crop_bgr, d=9, sigmaColor=60, sigmaSpace=60)
+
+        # 2. CLAHE with stronger clip for washed-out distant faces
+        lab = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(4, 4))
+        enhanced = cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
+
+        # 3. Boost saturation + brightness for washed-out distant faces
+        hsv = cv2.cvtColor(enhanced, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.3, 0, 255)   # saturation +30%
+        hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 1.08, 0, 255)   # brightness +8%
+        enhanced = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+        # 4. Multi-scale unsharp mask (fine detail + coarse structure)
+        blur_fine = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=1.0)
+        blur_coarse = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=2.5)
+        sharpened = cv2.addWeighted(enhanced, 1.8, blur_fine, -0.6, 0)
+        sharpened = cv2.addWeighted(sharpened, 1.3, blur_coarse, -0.3, 0)
+
+        # 5. Non-local-means denoising to clean up sharpening artifacts
+        final = cv2.fastNlMeansDenoisingColored(
+            sharpened, None, h=5, hForColorComponents=5,
+            templateWindowSize=7, searchWindowSize=21
+        )
+        return final
+    except Exception:
+        return _enhance_face_crop(face_crop_bgr)
 
 
 def _prepare_crop_for_save(
@@ -174,14 +298,52 @@ def _prepare_crop_for_save(
     target_width: Optional[int],
     max_upscale: float,
 ) -> np.ndarray:
+    """
+    High-quality upscale + enhance pipeline for saving face crops.
+
+    For small/distant faces:
+      1. Pre-upscale denoise (prevents noise amplification)
+      2. Multi-step 2x upscale with intermediate sharpening
+      3. Aggressive super-enhancement (CLAHE + saturation + multi-scale sharpen)
+
+    For normal faces:
+      1. Standard CLAHE + unsharp mask
+    """
     h, w = face_crop_bgr.shape[:2]
-    prepared = face_crop_bgr
-    if target_width and w > 0 and w < target_width:
-        scale = min(float(target_width) / float(w), max_upscale)
-        new_w = max(1, int(w * scale))
-        new_h = max(1, int(h * scale))
-        prepared = cv2.resize(prepared, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-    return _enhance_face_crop(prepared)
+    min_side = min(h, w)
+    is_small_face = min_side < 100
+
+    prepared = face_crop_bgr.copy()
+
+    # --- Step 1: Denoise BEFORE upscaling (prevents noise amplification) ---
+    if is_small_face:
+        prepared = _pre_upscale_denoise(prepared, min_side)
+
+    # --- Step 2: Multi-step iterative upscale (2x per step) ---
+    if target_width and target_width > 0:
+        prepared = _iterative_upscale(prepared, target_width, max_upscale)
+
+    # --- Step 3: Ensure both width AND height meet target ---
+    cur_h, cur_w = prepared.shape[:2]
+    if target_width and min(cur_h, cur_w) < target_width:
+        remaining_scale = min(float(target_width) / float(min(cur_h, cur_w)), max_upscale)
+        if remaining_scale > 1.05:
+            new_w = max(1, int(cur_w * remaining_scale))
+            new_h = max(1, int(cur_h * remaining_scale))
+            prepared = cv2.resize(prepared, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+    # --- Step 4: Enhancement based on original face size ---
+    if is_small_face:
+        prepared = _super_enhance_small_face(prepared)
+    else:
+        prepared = _enhance_face_crop(prepared)
+
+    return prepared
+
+
+# ===========================================================================
+#   BBOX CONVERSION
+# ===========================================================================
 
 def _bbox_to_ltrb(bbox: Tuple, frame_shape: Tuple) -> Tuple[int, int, int, int]:
     H, W = frame_shape[0], frame_shape[1]
@@ -215,6 +377,11 @@ def _bbox_to_ltrb(bbox: Tuple, frame_shape: Tuple) -> Tuple[int, int, int, int]:
     b = int(np.clip(x3, 0, H - 1))
     return l, t, r, b
 
+
+# ===========================================================================
+#   MAIN SAVE FUNCTION
+# ===========================================================================
+
 def save_face_image(
     face_crop_bgr: Optional[np.ndarray] = None,
     frame_bgr: Optional[np.ndarray] = None,
@@ -223,10 +390,10 @@ def save_face_image(
     confidence: Optional[float] = None,
     min_interval: float = DEFAULT_MIN_SAVE_INTERVAL_SECONDS,
     source: str = "stream",
-    expand_factor: float = 0.3,
-    target_width: Optional[int] = None,
-    max_upscale: float = 1.2,
-    jpeg_quality: int = 95,
+    expand_factor: float = 0.5,
+    target_width: Optional[int] = 320,
+    max_upscale: float = 6.0,
+    jpeg_quality: int = 98,
     stream_id: Optional[str] = None,
     prefer_png: bool = False,
     camera_name: Optional[str] = None,
@@ -267,12 +434,25 @@ def save_face_image(
             if w_box <= 0 or h_box <= 0:
                 return None
             
-            ew, eh = int(w_box * expand_factor), int(h_box * expand_factor)
+            # Adaptive expansion: smaller/distant faces get a much larger
+            # crop region to capture head + shoulders context, making the
+            # person identifiable even from far away.
+            min_side = min(w_box, h_box)
+            if min_side < 30:
+                effective_expand = max(expand_factor, 0.9)
+            elif min_side < 50:
+                effective_expand = max(expand_factor, 0.7)
+            elif min_side < 80:
+                effective_expand = max(expand_factor, 0.6)
+            else:
+                effective_expand = expand_factor
+            
+            ew, eh = int(w_box * effective_expand), int(h_box * effective_expand)
             el, et, er, eb = max(0, l - ew), max(0, t - eh), min(W, r + ew), min(H, b + eh)
             
             face_crop_bgr = frame_bgr[et:eb, el:er].copy()
 
-        if face_crop_bgr is None or face_crop_bgr.size == 0 or face_crop_bgr.shape[0] < 20 or face_crop_bgr.shape[1] < 20:
+        if face_crop_bgr is None or face_crop_bgr.size == 0 or face_crop_bgr.shape[0] < 10 or face_crop_bgr.shape[1] < 10:
             return None
 
         face_crop_bgr = _prepare_crop_for_save(face_crop_bgr, target_width, max_upscale)

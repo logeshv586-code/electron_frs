@@ -64,12 +64,28 @@ def delete_user(username: str) -> bool:
     if username not in users:
         return False
     
+    user_to_delete = users[username]
+    company_id = user_to_delete.get("company_id")
+    role = user_to_delete.get("role")
+    
     # Cascading Cleanup
     from .cleanup_utils import cleanup_user_tokens
     cleanup_user_tokens(username)
     
     del users[username]
     save_users(users)
+    
+    # Auto-delete company if the last Admin is deleted from User Management
+    if role == "Admin" and company_id:
+        remaining_admins = [u for u in users.values() if u.get("company_id") == company_id and u.get("role") == "Admin"]
+        if not remaining_admins:
+            try:
+                from .companies import delete_company
+                delete_company(company_id)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to delete orphaned company {company_id}: {e}")
+
     return True
 
 def list_users(company_id: Optional[str] = None) -> List[Dict[str, Any]]:

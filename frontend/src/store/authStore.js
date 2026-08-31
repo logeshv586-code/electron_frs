@@ -17,6 +17,20 @@ const parseLicenseEndMs = (value) => {
   return Date.UTC(year, month - 1, day, 23, 59, 59, 999);
 };
 
+const normalizeUser = (data = {}) => ({
+  username: data.username,
+  role: data.role,
+  email: data.email,
+  assigned_menus: data.assigned_menus || [],
+  assigned_cameras: data.assigned_cameras || [],
+  max_users_limit: Number(data.max_users_limit || 0),
+  max_cameras_limit: Number(data.max_cameras_limit || 0),
+  company_id: data.company_id || null,
+  license_start_date: data.license_start_date || null,
+  license_end_date: data.license_end_date || null,
+  is_active: data.is_active !== false,
+});
+
 const useAuthStore = create(
   persist(
     (set, get) => ({
@@ -48,21 +62,13 @@ const useAuthStore = create(
           const data = await response.json();
           const expiresInSeconds = Number(data.expires_in || 3600);
           const tokenExpiresAt = Date.now() + Math.max(60, expiresInSeconds) * 1000;
-          const user = {
-            username: data.username,
-            role: data.role,
-            email: data.email,
-            assigned_menus: data.assigned_menus || [],
-            company_id: data.company_id,
-            license_start_date: data.license_start_date,
-            license_end_date: data.license_end_date,
-          };
+          const user = normalizeUser(data);
 
           set({
             user,
             token: data.access_token,
             tokenExpiresAt,
-            company_id: data.company_id || null,
+            company_id: user.company_id,
             isAuthenticated: !skipAuthUpdate,
             isLoading: false,
             error: null,
@@ -72,7 +78,7 @@ const useAuthStore = create(
           if (window?.electronAPI?.setAuthToken) {
             window.electronAPI.setAuthToken(data.access_token).catch(() => {});
           }
-          return { success: true, role: data.role, username: data.username, company_id: data.company_id };
+          return { success: true, role: user.role, username: user.username, company_id: user.company_id };
         } catch (loginError) {
           window.clearTimeout(timeoutId);
           const message = loginError.name === 'AbortError'
@@ -139,8 +145,8 @@ const useAuthStore = create(
             get().logout();
             return null;
           }
-          const userData = await response.json();
-          set({ user: userData, company_id: userData.company_id || null, isAuthenticated: true });
+          const userData = normalizeUser(await response.json());
+          set({ user: userData, company_id: userData.company_id, isAuthenticated: true });
           return userData;
         } catch (requestError) {
           window.clearTimeout(timeoutId);
@@ -153,19 +159,32 @@ const useAuthStore = create(
       hasAnyRole: (roles) => roles.includes(get().user?.role),
       canManageUsers: () => ['SuperAdmin', 'Admin'].includes(get().user?.role),
       canManageCameras: () => ['SuperAdmin', 'Admin'].includes(get().user?.role),
+      canDelete: () => get().user?.role === 'SuperAdmin',
       getAssignedCameras: () => get().user?.assigned_cameras || [],
       getAssignedMenus: () => get().user?.assigned_menus || [],
+      getTenantLimits: () => ({
+        users: Number(get().user?.max_users_limit || 0),
+        cameras: Number(get().user?.max_cameras_limit || 0),
+      }),
       hasMenuAccess: (menu) => {
-        const menus = (get().user?.assigned_menus || []).map((value) => {
-          if (value === 'cameras') return 'camera';
-          if (value === 'admin') return 'users';
-          return value;
-        });
-        return menus.includes(menu);
+        if (get().user?.role === 'SuperAdmin') return true;
+        const aliases = {
+          cameras: 'camera',
+          admin: 'users',
+          backupmgmt: 'backup',
+          'attendance-report': 'attendance',
+          'day-report': 'attendance',
+          'week-report': 'attendance',
+          'month-report': 'attendance',
+        };
+        const target = aliases[menu] || menu;
+        const menus = (get().user?.assigned_menus || []).map((value) => aliases[value] || value);
+        return menus.includes(target);
       },
       isLicenseExpired: () => {
         const user = get().user;
-        if (!user || user.role !== 'Admin' || !user.license_end_date) return false;
+        if (!user || user.role === 'SuperAdmin') return false;
+        if (!user.license_end_date) return false;
         const endMs = parseLicenseEndMs(user.license_end_date);
         return endMs === null || endMs < Date.now();
       },

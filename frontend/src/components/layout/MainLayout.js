@@ -1,5 +1,6 @@
 import React from 'react';
 import useAuthStore from '../../store/authStore';
+import { API_BASE_URL } from '../../utils/apiConfig';
 import {
   LayoutDashboard,
   Users,
@@ -14,177 +15,253 @@ import {
   ChevronRight,
   ChevronDown,
   Menu,
+  X,
   Settings,
   Palette,
   CalendarDays,
   CalendarCheck,
-  Database
+  Database,
+  Building2,
+  ShieldCheck,
+  Circle,
 } from 'lucide-react';
 import './MainLayout.css';
 
-const MainLayout = ({ children, activeTab, onTabChange }) => {
-  const { user, logout, isLicenseExpired } = useAuthStore();
-  const [collapsed, setCollapsed] = React.useState(false);
-  const [expandedTabs, setExpandedTabs] = React.useState({});
+const ACCENTS = [
+  { id: 'sapphire', label: 'Sapphire', description: 'Commercial blue', color: '#2563eb' },
+  { id: 'teal', label: 'Teal', description: 'Security monitoring', color: '#0f8b83' },
+  { id: 'indigo', label: 'Indigo', description: 'Enterprise', color: '#4f46e5' },
+  { id: 'graphite', label: 'Graphite', description: 'Corporate neutral', color: '#475569' },
+];
 
-  const toggleExpanded = (tabId) => {
-    setExpandedTabs(prev => ({ ...prev, [tabId]: !prev[tabId] }));
+const MainLayout = ({ children, activeTab, onTabChange }) => {
+  const { user, token, logout, isLicenseExpired } = useAuthStore();
+  const [collapsed, setCollapsed] = React.useState(false);
+  const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [expandedTabs, setExpandedTabs] = React.useState({ matchingGroup: true, reportsGroup: true });
+  const [showAccentMenu, setShowAccentMenu] = React.useState(false);
+  const [accent, setAccent] = React.useState(() => {
+    const saved = localStorage.getItem('frs-accent');
+    return ACCENTS.some((item) => item.id === saved) ? saved : 'sapphire';
+  });
+  const [system, setSystem] = React.useState({ online: true, activeCameras: 0, totalCameras: 0 });
+
+  React.useEffect(() => {
+    document.documentElement.setAttribute('data-accent', accent);
+    document.body.removeAttribute('data-theme');
+    localStorage.setItem('frs-accent', accent);
+    localStorage.removeItem('theme');
+  }, [accent]);
+
+  React.useEffect(() => {
+    if (!token) return undefined;
+    let cancelled = false;
+
+    const loadStatus = async () => {
+      const headers = { Authorization: `Bearer ${token}` };
+      try {
+        const [statusResponse, cameraResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/status`, { headers }),
+          fetch(`${API_BASE_URL}/api/collections/cameras?page=1&per_page=1`, { headers }),
+        ]);
+        const cameras = cameraResponse.ok ? await cameraResponse.json() : {};
+        if (!cancelled) {
+          setSystem({
+            online: statusResponse.ok,
+            activeCameras: Number(cameras.active_cameras || 0),
+            totalCameras: Number(cameras.total_cameras || 0),
+          });
+        }
+      } catch (error) {
+        if (!cancelled) setSystem((previous) => ({ ...previous, online: false }));
+      }
+    };
+
+    loadStatus();
+    const timer = window.setInterval(loadStatus, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [token]);
+
+  const tabs = React.useMemo(() => [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'companies', label: 'Companies', icon: Building2, superAdminOnly: true },
+    { id: 'registration', label: 'Employees', icon: Users },
+    {
+      id: 'matchingGroup',
+      label: 'Matching',
+      icon: ScanFace,
+      subItems: [
+        { id: 'matching', label: 'Face Matching' },
+        { id: 'gallery', label: 'Face Gallery' },
+        { id: 'events', label: 'Recognition Events' },
+      ],
+    },
+    {
+      id: 'reportsGroup',
+      label: 'Reports',
+      icon: CalendarCheck,
+      subItems: [
+        { id: 'attendance-report', label: 'Attendance' },
+        { id: 'day-report', label: 'Daily Report' },
+        { id: 'week-report', label: 'Weekly Report' },
+        { id: 'month-report', label: 'Monthly Report' },
+      ],
+    },
+    { id: 'holiday-calendar', label: 'Holiday Calendar', icon: CalendarDays },
+    { id: 'camera', label: 'Cameras', icon: Camera },
+    { id: 'stream-viewer', label: 'Live View', icon: MonitorPlay },
+    { id: 'video', label: 'Video Processing', icon: Video },
+    { id: 'users', label: 'User Management', icon: Users },
+    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'backup', label: 'Backup', icon: Database },
+  ], []);
+
+  const normalizedAssignedMenus = React.useMemo(() => {
+    const source = Array.isArray(user?.assigned_menus) ? user.assigned_menus : [];
+    return new Set(source.map((menu) => {
+      if (menu === 'cameras') return 'camera';
+      if (menu === 'admin') return 'users';
+      if (menu === 'backupmgmt') return 'backup';
+      if (menu === 'attendance') return 'attendance-report';
+      return menu;
+    }));
+  }, [user?.assigned_menus]);
+
+  const role = String(user?.role || '').toLowerCase();
+  const defaultAccess = React.useMemo(() => {
+    if (role === 'superadmin') {
+      return new Set(['dashboard', 'companies', 'registration', 'matching', 'gallery', 'events', 'attendance-report', 'day-report', 'week-report', 'month-report', 'holiday-calendar', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup']);
+    }
+    if (role === 'admin') {
+      return new Set(['dashboard', 'registration', 'matching', 'gallery', 'events', 'attendance-report', 'day-report', 'week-report', 'month-report', 'holiday-calendar', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup']);
+    }
+    return new Set(['dashboard']);
+  }, [role]);
+
+  const hasExplicitMenus = normalizedAssignedMenus.size > 0;
+  const canAccess = React.useCallback((tabId) => {
+    if (role === 'superadmin') return true;
+    if (!hasExplicitMenus) return defaultAccess.has(tabId);
+    if (['admin'].includes(role) && ['attendance-report', 'day-report', 'week-report', 'month-report', 'backup'].includes(tabId)) return true;
+    return normalizedAssignedMenus.has(tabId);
+  }, [defaultAccess, hasExplicitMenus, normalizedAssignedMenus, role]);
+
+  const visibleTabs = tabs
+    .filter((tab) => !tab.superAdminOnly || role === 'superadmin')
+    .map((tab) => {
+      if (!tab.subItems) return tab;
+      return { ...tab, subItems: tab.subItems.filter((item) => canAccess(item.id)) };
+    })
+    .filter((tab) => tab.subItems ? tab.subItems.length > 0 : canAccess(tab.id));
+
+  const findLabel = () => {
+    for (const tab of tabs) {
+      if (tab.id === activeTab) return tab.label;
+      const child = tab.subItems?.find((item) => item.id === activeTab);
+      if (child) return child.label;
+    }
+    return 'Dashboard';
   };
 
-  const themes = [
-    { id: 'default', label: 'Dark Enterprise', color: '#0b1120' },
-    { id: 'light', label: 'Light Blue', color: '#ffffff' },
-    { id: 'navy', label: 'Navy Professional', color: '#1a365d' },
-    { id: 'phoenix', label: 'Phoenix Orange', color: '#f97316' },
-    { id: 'nexus', label: 'Nexus Cyberpunk', color: '#06b6d4' },
-  ];
+  const selectTab = (tabId) => {
+    onTabChange(tabId);
+    setMobileOpen(false);
+  };
 
-  const [theme, setTheme] = React.useState(() => {
-    const saved = localStorage.getItem('theme');
-    return themes.some(t => t.id === saved) ? saved : 'default';
-  });
+  const toggleExpanded = (tabId) => {
+    setExpandedTabs((previous) => ({ ...previous, [tabId]: !previous[tabId] }));
+  };
 
-  // Transition effect for theme changes
-  React.useEffect(() => {
-    document.body.style.transition = 'background-color 0.3s ease, color 0.3s ease';
-    const timer = setTimeout(() => {
-      document.body.style.transition = '';
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [theme]);
-  const [showThemeMenu, setShowThemeMenu] = React.useState(false);
-
-  React.useEffect(() => {
-    if (theme === 'default') {
-      document.body.removeAttribute('data-theme');
-    } else {
-      document.body.setAttribute('data-theme', theme);
-    }
-    localStorage.setItem('theme', theme);
-  }, [theme]);
-
-  const tabs = [
-    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
-    { id: 'companies', label: 'Companies', icon: <ScanFace size={20} /> }, // Added Companies
-    { id: 'registration', label: 'Employees', icon: <Users size={20} /> }, // Renamed to Employees
-    {
-      id: 'attendance',
-      label: 'Attendance',
-      icon: <CalendarCheck size={20} />,
-      subItems: [
-        { id: 'attendance-report', label: 'Attendance Report' },
-        { id: 'day-report', label: 'Day Report' },
-        { id: 'week-report', label: 'Week Report' },
-        { id: 'month-report', label: 'Month Report' },
-      ]
-    },
-    { id: 'holiday-calendar', label: 'Holiday Calendar', icon: <CalendarDays size={20} /> },
-    { id: 'gallery', label: 'Gallery', icon: <Image size={20} /> },
-    { id: 'events', label: 'Events', icon: <Bell size={20} /> },
-    { id: 'camera', label: 'Cameras', icon: <Camera size={20} /> }, // Renamed to Cameras
-    { id: 'stream-viewer', label: 'Stream Viewer', icon: <MonitorPlay size={20} /> },
-    { id: 'video', label: 'Video Processing', icon: <Video size={20} /> },
-    { id: 'users', label: 'User Management', icon: <Users size={20} /> },
-    { id: 'settings', label: 'Settings', icon: <Settings size={20} /> },
-    { id: 'backup', label: 'Backup Mgmt', icon: <Database size={20} /> },
-  ];
-
-  const visibleTabs = tabs.filter(tab => {
-    const userRole = user?.role ? user.role.toLowerCase() : '';
-    if (user?.assigned_menus && user.assigned_menus.length > 0) {
-      const normalizedMenus = user.assigned_menus.map(m => {
-        if (m === 'cameras') return 'camera';
-        if (m === 'admin') return 'users';
-        if (m === 'backupmgmt') return 'backup';
-        return m;
-      });
-      if (['admin', 'superadmin'].includes(userRole)) {
-        if (!normalizedMenus.includes('attendance')) normalizedMenus.push('attendance');
-        if (!normalizedMenus.includes('backup')) normalizedMenus.push('backup');
-      }
-      return normalizedMenus.includes(tab.id);
-    }
-    if (userRole === 'superadmin') return ['dashboard', 'companies', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup'].includes(tab.id);
-    if (userRole === 'admin') return ['dashboard', 'registration', 'attendance', 'holiday-calendar', 'gallery', 'events', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup'].includes(tab.id);
-    return ['dashboard'].includes(tab.id);
-  });
+  const handleLogout = () => {
+    setMobileOpen(false);
+    logout();
+  };
 
   return (
-    <div className={`main-layout ${collapsed ? 'collapsed' : ''}`}>
-      <aside className="sidebar">
+    <div className={`main-layout ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
+      {mobileOpen && <button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
+
+      <aside className="sidebar" aria-label="Application navigation">
         <div className="sidebar-header">
-          <div className="logo-container">
-            {!collapsed && <span className="logo-text">frs</span>}
-          </div>
-          <button
-            className="collapse-btn"
-            onClick={() => setCollapsed(!collapsed)}
-            title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-          >
+          <button className="brand-block" onClick={() => selectTab('dashboard')} title="Face Recognition">
+            <span className="brand-mark"><ScanFace size={19} strokeWidth={2.1} /></span>
+            {!collapsed && (
+              <span className="brand-copy">
+                <strong>Face Recognition</strong>
+                <small>Attendance System</small>
+              </span>
+            )}
+          </button>
+          <button className="mobile-close-btn" onClick={() => setMobileOpen(false)} aria-label="Close menu"><X size={18} /></button>
+          <button className="collapse-btn" onClick={() => setCollapsed((value) => !value)} title={collapsed ? 'Expand navigation' : 'Collapse navigation'}>
             {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
           </button>
         </div>
 
         <div className="user-profile-section">
-          <div className="user-avatar">
-            {user?.username?.charAt(0).toUpperCase() || 'U'}
-          </div>
+          <div className="user-avatar">{user?.username?.charAt(0)?.toUpperCase() || 'U'}</div>
           {!collapsed && (
             <div className="user-info">
               <span className="user-name">{user?.username || 'User'}</span>
-              <span className="user-role-badge">{user?.role || 'Guest'}</span>
+              <span className="user-role-line"><ShieldCheck size={12} /> {user?.role || 'User'}</span>
             </div>
           )}
         </div>
 
         <nav className="sidebar-nav">
-          {visibleTabs.map(tab => (
-            <div key={tab.id} className="nav-item-container">
-              <button
-                className={`nav-item ${activeTab === tab.id || (tab.subItems && tab.subItems.some(sub => sub.id === activeTab)) ? 'active' : ''}`}
-                onClick={() => {
-                  if (tab.subItems) {
-                    toggleExpanded(tab.id);
-                  } else {
-                    onTabChange(tab.id);
-                  }
-                }}
-                title={collapsed ? tab.label : ''}
-              >
-                <div className="nav-item-content">
-                  <span className="nav-icon">{tab.icon}</span>
+          {visibleTabs.map((tab) => {
+            const Icon = tab.icon;
+            const childActive = tab.subItems?.some((item) => item.id === activeTab);
+            const active = activeTab === tab.id || childActive;
+            const expanded = !!expandedTabs[tab.id];
+            return (
+              <div key={tab.id} className="nav-item-container">
+                <button
+                  className={`nav-item ${active ? 'active' : ''}`}
+                  onClick={() => tab.subItems ? toggleExpanded(tab.id) : selectTab(tab.id)}
+                  title={collapsed ? tab.label : undefined}
+                >
+                  <span className="nav-icon"><Icon size={17} strokeWidth={1.9} /></span>
                   {!collapsed && <span className="nav-label">{tab.label}</span>}
-                </div>
-                {!collapsed && tab.subItems && (
-                  <span className="nav-chevron">
-                    <ChevronDown size={16} style={{ transform: expandedTabs[tab.id] ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
-                  </span>
+                  {!collapsed && tab.subItems && <ChevronDown className={`nav-chevron ${expanded ? 'expanded' : ''}`} size={14} />}
+                </button>
+                {!collapsed && tab.subItems && expanded && (
+                  <div className="sub-nav">
+                    {tab.subItems.map((item) => (
+                      <button key={item.id} className={`sub-nav-item ${activeTab === item.id ? 'active' : ''}`} onClick={() => selectTab(item.id)}>
+                        <span className="sub-nav-line" />
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 )}
-                {activeTab === tab.id && !collapsed && !tab.subItems && <div className="active-indicator" />}
-              </button>
-
-              {!collapsed && tab.subItems && expandedTabs[tab.id] && (
-                <div className="sub-nav">
-                  {tab.subItems.map(subItem => (
-                    <button
-                      key={subItem.id}
-                      className={`sub-nav-item ${activeTab === subItem.id ? 'active' : ''}`}
-                      onClick={() => onTabChange(subItem.id)}
-                    >
-                      <span className="sub-nav-indicator"></span>
-                      <span className="nav-label">{subItem.label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </nav>
 
+        <div className="sidebar-system-card">
+          {!collapsed && (
+            <>
+              <div className="sidebar-system-row">
+                <span className={`system-dot ${system.online ? 'online' : 'offline'}`} />
+                <span>{system.online ? 'System connected' : 'Backend offline'}</span>
+              </div>
+              <div className="sidebar-camera-row">
+                <Camera size={13} />
+                <span>{system.activeCameras}/{system.totalCameras} cameras active</span>
+              </div>
+            </>
+          )}
+        </div>
+
         <div className="sidebar-footer">
-          <button className="logout-btn" onClick={logout} title={collapsed ? "Logout" : ""}>
-            <LogOut size={20} />
-            {!collapsed && <span>Logout</span>}
+          <button className="logout-btn" onClick={handleLogout} title={collapsed ? 'Sign out' : undefined}>
+            <LogOut size={16} />
+            {!collapsed && <span>Sign out</span>}
           </button>
         </div>
       </aside>
@@ -192,61 +269,55 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
       <main className="content-area">
         <header className="top-header">
           <div className="header-left">
-            <button className="mobile-menu-btn">
-              <Menu size={24} />
-            </button>
-            <h1 className="page-title">
-              {tabs.find(t => t.id === activeTab)?.label || 'Dashboard'}
-            </h1>
+            <button className="mobile-menu-btn" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={19} /></button>
+            <div className="page-heading">
+              <h1 className="page-title">{findLabel()}</h1>
+              <span className="page-context">Face Recognition System</span>
+            </div>
           </div>
-          <div className="header-right">
-            <div className="theme-switcher-container">
-              <button
-                className="theme-toggle-btn"
-                onClick={() => setShowThemeMenu(!showThemeMenu)}
-                title="Change Theme"
-              >
-                <Palette size={20} />
-              </button>
 
-              {showThemeMenu && (
-                <div className="theme-menu">
-                  <div className="theme-menu-header">Select Theme</div>
-                  {themes.map(t => (
+          <div className="header-right">
+            <div className="header-status" title="Backend and camera status">
+              <span className={`system-dot ${system.online ? 'online' : 'offline'}`} />
+              <span className="status-copy">{system.online ? 'Connected' : 'Offline'}</span>
+              <span className="status-divider" />
+              <Camera size={14} />
+              <span>{system.activeCameras}/{system.totalCameras}</span>
+            </div>
+
+            <div className="accent-switcher">
+              <button className="accent-toggle-btn" onClick={() => setShowAccentMenu((value) => !value)} aria-expanded={showAccentMenu} title="Accent color">
+                <Palette size={17} />
+              </button>
+              {showAccentMenu && (
+                <div className="accent-menu">
+                  <div className="accent-menu-header">
+                    <strong>Accent color</strong>
+                    <span>Light appearance stays fixed</span>
+                  </div>
+                  {ACCENTS.map((item) => (
                     <button
-                      key={t.id}
-                      className={`theme-option ${theme === t.id ? 'active' : ''}`}
-                      onClick={() => {
-                        setTheme(t.id);
-                        setShowThemeMenu(false);
-                      }}
+                      key={item.id}
+                      className={`accent-option ${accent === item.id ? 'active' : ''}`}
+                      onClick={() => { setAccent(item.id); setShowAccentMenu(false); }}
                     >
-                      <div className="theme-preview" style={{ backgroundColor: t.color }}></div>
-                      <span className="theme-label">{t.label}</span>
-                      {theme === t.id && <div className="theme-check">✓</div>}
+                      <span className="accent-swatch" style={{ backgroundColor: item.color }} />
+                      <span className="accent-option-copy"><strong>{item.label}</strong><small>{item.description}</small></span>
+                      {accent === item.id && <Circle size={8} fill="currentColor" />}
                     </button>
                   ))}
                 </div>
               )}
             </div>
-
-            <div className="system-status">
-              <span className="status-dot online"></span>
-              <span className="status-text">System Online</span>
-            </div>
           </div>
         </header>
 
         {user?.role === 'Admin' && isLicenseExpired() && (
-          <div style={{ padding: '12px 16px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', margin: '12px 16px', borderRadius: 8 }}>
-            Licence expired. Please contact SuperAdmin to renew access.
-          </div>
+          <div className="license-alert">Licence expired. Contact SuperAdmin to renew this company account.</div>
         )}
 
         <div className="content-wrapper">
-          <div key={activeTab} className="animate-slide-up">
-            {children}
-          </div>
+          <div key={activeTab} className="animate-slide-up content-page">{children}</div>
         </div>
       </main>
     </div>

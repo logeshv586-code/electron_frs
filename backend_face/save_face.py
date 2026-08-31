@@ -64,11 +64,9 @@ def _timestamp_filename(label: str) -> str:
 def _bbox_to_ltrb(bbox: Tuple, frame_shape: Tuple[int, ...]) -> Tuple[int, int, int, int]:
     h, w = frame_shape[:2]
     x1, y1, x2, y2 = [float(v) for v in bbox]
-    # Normalized xywh
     if all(0 <= v <= 1 for v in (x1, y1, x2, y2)):
         left = int(x1 * w); top = int(y1 * h)
         right = int((x1 + x2) * w); bottom = int((y1 + y2) * h)
-    # xywh pixel form
     elif x2 > 0 and y2 > 0 and x1 + x2 <= w and y1 + y2 <= h and not (x2 > x1 and y2 > y1):
         left, top, right, bottom = int(x1), int(y1), int(x1 + x2), int(y1 + y2)
     else:
@@ -82,11 +80,6 @@ def _bbox_to_ltrb(bbox: Tuple, frame_shape: Tuple[int, ...]) -> Tuple[int, int, 
 
 
 def _prepare_crop(face_crop_bgr: np.ndarray, target_width: int = 320, max_upscale: float = 4.0) -> np.ndarray:
-    """Human-view enhancement only; recognition always uses the original frame.
-
-    Mild denoise/CLAHE is intentionally used instead of aggressive sharpening that can
-    create synthetic edges and mislead operators reviewing evidence.
-    """
     image = face_crop_bgr.copy()
     h, w = image.shape[:2]
     min_side = min(h, w)
@@ -122,7 +115,7 @@ def save_face_image(
     company_id: Optional[str] = None,
     identity_key: Optional[str] = None,
     unknown_cluster_id: Optional[str] = None,
-) -> Optional[Path]:
+):
     if face_crop_bgr is None and (frame_bgr is None or bbox is None):
         return None
 
@@ -142,7 +135,6 @@ def save_face_image(
     with _lock:
         if min_interval > 0 and now - _last_saved_time.get(cooldown_key, 0.0) < min_interval:
             return None
-        # Reserve the slot before file I/O to prevent simultaneous worker duplicates.
         _last_saved_time[cooldown_key] = now
 
     try:
@@ -172,7 +164,13 @@ def save_face_image(
         path = target_dir / filename
         if not cv2.imwrite(str(path), prepared, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)]):
             return None
-        return path
+        try:
+            from storage.evidence_store import get_evidence_store
+            stored = get_evidence_store().store_file(path)
+            return stored if stored != str(path) else path
+        except Exception as exc:
+            logger.warning("Evidence object-store mirror failed; keeping local file: %s", exc)
+            return path
     except Exception as exc:
         logger.error("Failed saving face evidence: %s", exc)
         return None
@@ -195,6 +193,8 @@ def record_face_event(
     attendance_eligible: bool = False,
     unknown_cluster_id: Optional[str] = None,
     captured_at=None,
+    direction_override: Optional[str] = None,
+    model_version: Optional[str] = None,
 ) -> dict:
     company_id = str(company_id or "default")
     camera = get_camera_context(camera_name, company_id, camera_id)
@@ -209,19 +209,36 @@ def record_face_event(
             captured_at=captured_at,
         )
 
+    identity = unknown_cluster_id or label_s
+    resolved_camera = camera.get("name") or camera_name or "default"
+    try:
+        from cache.redis_cache import get_event_cache
+        event_cache = get_event_cache()
+        timestamp = captured_at.timestamp() if hasattr(captured_at, "timestamp") else None
+        if not event_cache.claim(
+            company_id,
+            identity,
+            resolved_camera,
+            ttl_seconds=int(os.getenv("FRS_DISTRIBUTED_EVENT_TTL", "5")),
+            timestamp=timestamp,
+        ):
+            return {"deduplicated": True, "company_id": company_id, "identity": identity}
+    except Exception:
+        event_cache = None
+
     event_type = "unknown" if label_s == "unknown" else "known"
     from auth.storage import get_settings
     attendance_settings = get_settings(company_id).get("attendance", {})
-    return record_recognition_event(
+    event = record_recognition_event(
         company_id=company_id,
         person_key=None if event_type == "unknown" else label_s,
         display_name=display_name if event_type == "known" else "Unknown",
         event_type=event_type,
         camera_id=camera.get("id"),
-        camera_name=camera.get("name") or camera_name,
+        camera_name=resolved_camera,
         location=camera.get("location") or camera_name,
         camera_role=camera.get("camera_role") or "BIDIRECTIONAL",
-        direction=camera.get("direction") or "AUTO",
+        direction=(direction_override or camera.get("direction") or "AUTO"),
         captured_at=captured_at,
         confidence=float(confidence),
         distance=distance,
@@ -229,9 +246,15 @@ def record_face_event(
         face_size=face_size,
         image_path=image_path,
         source=source,
-        model_version="dlib-128-consensus-v2",
+        model_version=model_version or ("arcface-512" if embedding is not None and len(embedding) == 512 else "dlib-128-consensus-v2"),
         attendance_eligible=bool(attendance_eligible and event_type == "known"),
         unknown_cluster_id=unknown_cluster_id,
         shift_start=attendance_settings.get("shift_start"),
         shift_end=attendance_settings.get("shift_end"),
     )
+    if event_cache is not None:
+        try:
+            event_cache.publish(company_id, event)
+        except Exception:
+            pass
+    return event

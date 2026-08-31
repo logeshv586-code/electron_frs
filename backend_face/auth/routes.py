@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from .security import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from .users import create_user, get_user, list_users, update_user
 from .storage import ensure_auth_data_dir, get_tokens, save_tokens
-from .license_dates import parse_license_datetime
+from .middleware import is_tenant_license_valid
 from db.repository import create_password_reset_token, consume_password_reset_token, write_audit
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,9 @@ class LoginResponse(BaseModel):
     username: str
     email: Optional[str] = None
     assigned_menus: list
+    assigned_cameras: list
+    max_users_limit: int = 0
+    max_cameras_limit: int = 0
     license_start_date: Optional[str] = None
     license_end_date: Optional[str] = None
     company_id: Optional[str] = None
@@ -39,7 +42,7 @@ class LoginResponse(BaseModel):
 
 class BootstrapSuperAdminRequest(BaseModel):
     username: str
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=12)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -49,7 +52,7 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     username: str
     token: str
-    new_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=12)
 
 
 class UserResponse(BaseModel):
@@ -79,14 +82,19 @@ async def login(request: LoginRequest):
         write_audit("LOGIN_FAILED", username=request.username)
         raise HTTPException(status_code=401, detail="Invalid credentials or role")
 
-    if auth_user.get("role") == "Admin":
-        end_str = auth_user.get("license_end_date")
-        if end_str:
-            end_dt = parse_license_datetime(end_str)
-            if end_dt and end_dt < datetime.now(timezone.utc):
-                raise HTTPException(status_code=403, detail="License expired. Contact SuperAdmin.")
+    # The platform SuperAdmin is internal. Every customer Admin/Supervisor is governed
+    # by the tenant Admin's license window; an expired tenant cannot continue through a
+    # Supervisor session after the Admin license has expired.
+    if not is_tenant_license_valid(auth_user):
+        write_audit(
+            "LOGIN_BLOCKED_LICENSE",
+            username=auth_user.get("username"),
+            company_id=auth_user.get("company_id"),
+        )
+        raise HTTPException(status_code=403, detail="Company license is inactive or expired. Contact your provider.")
 
     expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    now = datetime.now(timezone.utc)
     access_token = create_access_token(
         data={
             "sub": auth_user["username"],
@@ -100,8 +108,8 @@ async def login(request: LoginRequest):
         "username": auth_user["username"],
         "role": auth_user["role"],
         "company_id": auth_user.get("company_id"),
-        "issued_at": int(datetime.now(timezone.utc).timestamp()),
-        "expires_at": int((datetime.now(timezone.utc) + expires).timestamp()),
+        "issued_at": int(now.timestamp()),
+        "expires_at": int((now + expires).timestamp()),
     }
     save_tokens(tokens)
     write_audit(
@@ -117,6 +125,9 @@ async def login(request: LoginRequest):
         username=auth_user["username"],
         email=auth_user.get("email"),
         assigned_menus=auth_user.get("assigned_menus", auth_user.get("menus", [])),
+        assigned_cameras=auth_user.get("assigned_cameras", []),
+        max_users_limit=int(auth_user.get("max_users_limit") or 0),
+        max_cameras_limit=int(auth_user.get("max_cameras_limit") or 0),
         license_start_date=auth_user.get("license_start_date"),
         license_end_date=auth_user.get("license_end_date"),
         company_id=auth_user.get("company_id"),

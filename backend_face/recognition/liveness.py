@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 class LivenessEngine:
     """Presentation-attack gate with optional ONNX PAD model and temporal fallback.
 
-    When FRS_LIVENESS_MODEL_PATH points to a deployed PAD model, attendance can fail
-    closed using the model score. Without a PAD model, a passive temporal/texture score
-    is still reported but does not block attendance unless FRS_LIVENESS_REQUIRED=1.
+    A configured or explicitly required PAD model is fail-closed: if the model file is
+    missing, cannot load, or inference fails, attendance is rejected. Without a configured
+    PAD model, the temporal/texture score remains advisory unless FRS_LIVENESS_REQUIRED=1.
     """
 
     def __init__(self) -> None:
@@ -43,7 +43,9 @@ class LivenessEngine:
             return True
         if self.required in {"0", "false", "no", "off"}:
             return False
-        return self.model_available
+        # auto: once a PAD model is configured the customer is declaring it part of the
+        # attendance trust boundary, so missing/broken inference must not silently downgrade.
+        return bool(self.model_path)
 
     def _ensure_session(self) -> bool:
         if self._session is not None:
@@ -113,15 +115,36 @@ class LivenessEngine:
 
         texture = min(float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 220.0, 1.0)
         dynamic = min(float(np.std(gray)) / 60.0, 1.0)
-        # Natural faces have non-zero temporal micro-change. Extremely static crops are
-        # suspicious, but the heuristic remains advisory unless explicitly required.
         motion_score = float(np.clip((motion - 0.004) / 0.05, 0.0, 1.0))
         return float(np.clip(texture * 0.42 + dynamic * 0.28 + motion_score * 0.30, 0.0, 1.0))
 
     def evaluate(self, track: Dict, crop_bgr: np.ndarray) -> Dict[str, object]:
+        required = self.fail_closed
         if crop_bgr is None or crop_bgr.size == 0:
-            return {"score": 0.0, "passed": not self.fail_closed, "mode": "invalid", "required": self.fail_closed}
+            return {"score": 0.0, "passed": not required, "mode": "invalid", "required": required, "model_available": self.model_available}
+
+        model_available = self.model_available
+        if required and self.model_path and not model_available:
+            return {
+                "score": 0.0,
+                "instant_score": 0.0,
+                "passed": False,
+                "mode": "model-unavailable",
+                "required": True,
+                "model_available": False,
+            }
+
         model_score = self._model_score(crop_bgr)
+        if required and self.model_path and model_score is None:
+            return {
+                "score": 0.0,
+                "instant_score": 0.0,
+                "passed": False,
+                "mode": "model-inference-failed",
+                "required": True,
+                "model_available": model_available,
+            }
+
         heuristic = self._heuristic_score(track, crop_bgr)
         mode = "onnx-pad" if model_score is not None else "temporal-heuristic"
         score = float(model_score if model_score is not None else heuristic)
@@ -132,7 +155,7 @@ class LivenessEngine:
         history.append(score)
         stable_score = float(np.mean(list(history)[-3:])) if history else score
         enough_samples = len(history) >= (2 if model_score is not None else 3)
-        if self.fail_closed:
+        if required:
             passed = bool(enough_samples and stable_score >= self.threshold)
         else:
             passed = True
@@ -141,8 +164,8 @@ class LivenessEngine:
             "instant_score": score,
             "passed": passed,
             "mode": mode,
-            "required": self.fail_closed,
-            "model_available": self.model_available,
+            "required": required,
+            "model_available": model_available,
         }
 
 

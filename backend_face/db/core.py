@@ -23,7 +23,12 @@ def is_postgres() -> bool:
 
 
 def _adapt_sql(sql: str) -> str:
-    return sql.replace("?", "%s") if _IS_POSTGRES else sql
+    if not _IS_POSTGRES:
+        return sql
+    adapted = sql.replace("?", "%s")
+    # SQLite NOCASE is not valid PostgreSQL syntax. Keep ordering portable.
+    adapted = adapted.replace("ORDER BY name COLLATE NOCASE", "ORDER BY LOWER(name), name")
+    return adapted
 
 
 @contextmanager
@@ -119,6 +124,25 @@ def _ddl_blob() -> str:
 def _run_ddl(conn, sql: str) -> None:
     cur = conn.cursor()
     cur.execute(_adapt_sql(sql))
+
+
+def _ensure_camera_columns(conn) -> None:
+    columns = {
+        "line_x1": "REAL",
+        "line_y1": "REAL",
+        "line_x2": "REAL",
+        "line_y2": "REAL",
+        "in_side": "TEXT NOT NULL DEFAULT 'POSITIVE'",
+    }
+    cur = conn.cursor()
+    if _IS_POSTGRES:
+        for name, definition in columns.items():
+            cur.execute(f"ALTER TABLE cameras ADD COLUMN IF NOT EXISTS {name} {definition}")
+        return
+    existing = {row[1] for row in cur.execute("PRAGMA table_info(cameras)").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            cur.execute(f"ALTER TABLE cameras ADD COLUMN {name} {definition}")
 
 
 def init_database() -> None:
@@ -261,6 +285,11 @@ def init_database() -> None:
                 zone_id TEXT,
                 camera_role TEXT NOT NULL DEFAULT 'BIDIRECTIONAL',
                 direction TEXT NOT NULL DEFAULT 'AUTO',
+                line_x1 REAL,
+                line_y1 REAL,
+                line_x2 REAL,
+                line_y2 REAL,
+                in_side TEXT NOT NULL DEFAULT 'POSITIVE',
                 status TEXT NOT NULL DEFAULT 'inactive',
                 created_at TEXT NOT NULL,
                 last_seen TEXT,
@@ -305,5 +334,6 @@ def init_database() -> None:
         with db_connection() as conn:
             for statement in statements:
                 _run_ddl(conn, statement)
+            _ensure_camera_columns(conn)
 
         _INITIALIZED = True

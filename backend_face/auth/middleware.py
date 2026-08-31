@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterable
 from urllib.parse import parse_qs
 
 from .security import verify_token
 from .users import get_user
-from .storage import get_tokens
+from .storage import get_tokens, get_users
 from .license_dates import parse_license_datetime
 
 PUBLIC_PATHS = {
@@ -32,6 +32,27 @@ MEDIA_QUERY_TOKEN_PREFIXES = (
     "/api/webrtc/",
 )
 
+# Old compatibility endpoints pre-date tenant-aware camera management and must never
+# be reachable by customer Admin/Supervisor accounts. Enhanced /api/collections routes
+# are the supported camera/stream path.
+LEGACY_SUPERADMIN_ONLY_PREFIXES = (
+    "/capture_face_upload",
+    "/capture_face_b64",
+    "/api/start_stream",
+    "/api/stop_stream",
+    "/api/get_stream_for_camera",
+    "/api/video_feed/",
+)
+
+ROLE_DEFAULT_MENUS = {
+    "Admin": {
+        "dashboard", "analytics", "registration", "matching", "gallery", "events",
+        "attendance", "attendance-report", "day-report", "week-report", "month-report",
+        "camera", "cameras", "stream-viewer", "video", "users", "settings", "backup",
+    },
+    "Supervisor": {"dashboard", "events", "attendance", "attendance-report", "camera", "cameras", "stream-viewer"},
+}
+
 
 def get_current_user_from_token(token: str) -> Optional[Dict[str, Any]]:
     token_data = verify_token(token)
@@ -44,16 +65,49 @@ def get_current_user_from_token(token: str) -> Optional[Dict[str, Any]]:
     return user
 
 
-def is_admin_license_valid(user: Dict[str, Any]) -> bool:
-    if user.get("role") != "Admin":
+def _license_window_valid(start_value: Optional[str], end_value: Optional[str]) -> bool:
+    now = datetime.now(timezone.utc)
+    if start_value:
+        start_dt = parse_license_datetime(start_value)
+        if not start_dt or start_dt > now:
+            return False
+    if end_value:
+        end_dt = parse_license_datetime(end_value)
+        if not end_dt or end_dt < now:
+            return False
+    return True
+
+
+def is_tenant_license_valid(user: Dict[str, Any]) -> bool:
+    """Validate the customer tenant license for both Admin and Supervisor users.
+
+    SuperAdmin is the private platform operator and is not constrained by customer
+    license dates. A Supervisor inherits the active license window of its company Admin.
+    """
+    role = user.get("role")
+    if role == "SuperAdmin":
         return True
-    end_str = user.get("license_end_date")
-    if not end_str:
-        return True
-    end_dt = parse_license_datetime(end_str)
-    if not end_dt:
+    company_id = str(user.get("company_id") or "")
+    if not company_id:
         return False
-    return end_dt >= datetime.now(timezone.utc)
+
+    if role == "Admin":
+        return _license_window_valid(user.get("license_start_date"), user.get("license_end_date"))
+
+    admins = [
+        account for account in get_users().values()
+        if account.get("role") == "Admin"
+        and account.get("is_active", True)
+        and str(account.get("company_id") or "") == company_id
+    ]
+    if not admins:
+        return False
+    return any(_license_window_valid(admin.get("license_start_date"), admin.get("license_end_date")) for admin in admins)
+
+
+# Backward compatible name used by existing modules/tests.
+def is_admin_license_valid(user: Dict[str, Any]) -> bool:
+    return is_tenant_license_valid(user)
 
 
 def check_permission(current_user: Dict[str, Any], required_role: str) -> bool:
@@ -65,6 +119,61 @@ def check_permission(current_user: Dict[str, Any], required_role: str) -> bool:
     return required_role in ROLE_HIERARCHY.get(user_role, [])
 
 
+def _normalized_menus(user: Dict[str, Any]) -> set[str]:
+    aliases = {
+        "cameras": "camera",
+        "admin": "users",
+        "backupmgmt": "backup",
+        "attendance-report": "attendance",
+        "day-report": "attendance",
+        "week-report": "attendance",
+        "month-report": "attendance",
+    }
+    configured = user.get("assigned_menus") or user.get("menus") or []
+    if not configured:
+        configured = ROLE_DEFAULT_MENUS.get(user.get("role"), set())
+    result = set()
+    for value in configured:
+        key = str(value).strip().lower()
+        result.add(key)
+        result.add(aliases.get(key, key))
+    return result
+
+
+def _has_any_menu(user: Dict[str, Any], names: Iterable[str]) -> bool:
+    if user.get("role") == "SuperAdmin":
+        return True
+    menus = _normalized_menus(user)
+    return any(name in menus for name in names)
+
+
+def _menu_allowed(current_user: Dict[str, Any], path: str) -> bool:
+    # Authentication and protected media are supporting capabilities, not standalone menus.
+    if path.startswith(("/api/auth/", "/api/gallery/image", "/api/captured/image")):
+        return True
+    if path.startswith("/api/registration"):
+        return _has_any_menu(current_user, {"registration"})
+    if path.startswith("/api/matching") or path.startswith("/api/events/match-face"):
+        return _has_any_menu(current_user, {"matching", "gallery"})
+    if path.startswith(("/api/events/attendance", "/api/events/export", "/api/events/employees/export", "/api/events/dashboard")):
+        return _has_any_menu(current_user, {"attendance", "dashboard"})
+    if path.startswith("/api/events"):
+        return _has_any_menu(current_user, {"events", "attendance"})
+    if path.startswith("/api/analytics"):
+        return _has_any_menu(current_user, {"analytics", "dashboard"})
+    if path.startswith(("/api/collections", "/api/cameras")):
+        return _has_any_menu(current_user, {"camera", "stream-viewer"})
+    if path.startswith(("/api/video", "/api/webrtc")):
+        return _has_any_menu(current_user, {"video", "stream-viewer", "camera"})
+    if path.startswith("/api/users/settings"):
+        return _has_any_menu(current_user, {"settings"})
+    if path.startswith("/api/users"):
+        return _has_any_menu(current_user, {"users"})
+    if path.startswith("/api/backup"):
+        return _has_any_menu(current_user, {"backup"})
+    return True
+
+
 def check_path_permission(current_user: Dict[str, Any], path: str, method: str) -> bool:
     role = current_user.get("role")
     if not role:
@@ -74,13 +183,18 @@ def check_path_permission(current_user: Dict[str, Any], path: str, method: str) 
     if role == "SuperAdmin":
         return True
 
-    # Deleting biometric evidence is SuperAdmin-only.
-    if path == "/api/events/delete" and method == "DELETE":
+    # Customer accounts are intentionally non-destructive. Admins can create/update/
+    # deactivate within their tenant; hard deletion remains an internal SuperAdmin action.
+    if method == "DELETE":
+        return False
+    if any(path.startswith(prefix) for prefix in LEGACY_SUPERADMIN_ONLY_PREFIXES):
+        return False
+    if path.startswith("/api/companies"):
+        return False
+    if not _menu_allowed(current_user, path):
         return False
 
     if role == "Admin":
-        if path.startswith("/api/users/") and ("superadmin" in path.lower() or path.endswith("/logs")):
-            return False
         return True
 
     if role == "Supervisor":
@@ -88,15 +202,12 @@ def check_path_permission(current_user: Dict[str, Any], path: str, method: str) 
             "/api/dashboard",
             "/api/cameras",
             "/api/auth/me",
+            "/api/auth/logout",
             "/api/analytics",
             "/api/registration",
             "/api/collections",
             "/api/events",
             "/api/webrtc",
-            "/api/get_stream_for_camera",
-            "/api/start_stream",
-            "/api/stop_stream",
-            "/api/start_collection_streams",
             "/api/gallery/image",
             "/api/captured/image",
         )
@@ -121,8 +232,6 @@ def _header_token(scope) -> Optional[str]:
 
 
 def _token_is_active(token: str) -> bool:
-    # Existing installations use an explicit revocation list/active-token store.
-    # A token must both validate cryptographically and remain registered here.
     return token in get_tokens()
 
 
@@ -156,8 +265,8 @@ class RBACMiddleware:
         if not current_user or not _token_is_active(token):
             await self.send_unauthorized(send)
             return
-        if current_user.get("role") == "Admin" and not is_admin_license_valid(current_user):
-            await self.send_forbidden(send, b'{"detail":"License expired. Contact SuperAdmin."}')
+        if not is_tenant_license_valid(current_user):
+            await self.send_forbidden(send, b'{"detail":"Company license is inactive or expired. Contact your provider."}')
             return
         if not check_path_permission(current_user, path, method):
             await self.send_forbidden(send)
@@ -173,18 +282,16 @@ class RBACMiddleware:
         if not token or not current_user or not _token_is_active(token):
             await send({"type": "websocket.close", "code": 4001})
             return
+        if not is_tenant_license_valid(current_user):
+            await send({"type": "websocket.close", "code": 4003})
+            return
 
-        # /ws/recognitions/{company_id}: a normal tenant may only subscribe to itself.
         path = scope.get("path", "")
         if path.startswith("/ws/recognitions/") and current_user.get("role") != "SuperAdmin":
             requested_company = path.rsplit("/", 1)[-1]
             if str(requested_company) != str(current_user.get("company_id") or "default"):
                 await send({"type": "websocket.close", "code": 4003})
                 return
-
-        if current_user.get("role") == "Admin" and not is_admin_license_valid(current_user):
-            await send({"type": "websocket.close", "code": 4003})
-            return
 
         scope["user"] = current_user
         scope["auth_token"] = token

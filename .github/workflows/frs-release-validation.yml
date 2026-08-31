@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: frs-production-validation
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -68,13 +68,17 @@ jobs:
           CI: 'false'
         run: npm run build
 
-      - name: Verify light product design guardrails
+      - name: Verify tenant and product guardrails
         shell: bash
         run: |
           grep -q 'data-accent' frontend/src/components/layout/MainLayout.js
           grep -q 'Sapphire' frontend/src/components/layout/MainLayout.js
           grep -q 'REFERENCE_ONLY' frontend/src/components/camera/AddCameraForm.js
           grep -q 'AuthenticatedImage' frontend/src/components/FaceGallery.js
+          grep -q 'Only SuperAdmin can permanently delete users' backend_face/auth/user_routes.py
+          grep -q 'if method == "DELETE"' backend_face/auth/middleware.py
+          grep -q 'assigned_cameras' backend_face/camera_management/routes.py
+          grep -q 'tenant license' backend_face/auth/middleware.py
           ! grep -q 'login-background-video' frontend/src/components/auth/AnimatedLoginPage.js
           ! grep -q 'Nexus Cyberpunk' frontend/src/components/layout/MainLayout.js
 

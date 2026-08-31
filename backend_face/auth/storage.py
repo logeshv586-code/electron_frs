@@ -5,17 +5,20 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import json
 import logging
+import threading
 
 from db.repository import get_kv_namespace, set_kv_namespace, get_kv, set_kv
 
 logger = logging.getLogger(__name__)
 
-# Kept for import compatibility only. Runtime state is now database-backed.
-AUTH_DATA_DIR = Path("data/auth")
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+AUTH_DATA_DIR = BACKEND_DIR / "data" / "auth"
 USERS_FILE = AUTH_DATA_DIR / "users.json"
 SETTINGS_FILE = AUTH_DATA_DIR / "settings.json"
 COMPANIES_FILE = AUTH_DATA_DIR / "companies.json"
-CAMERAS_FILE = Path("data/cameras.json")
+CAMERAS_FILE = BACKEND_DIR / "data" / "cameras.json"
+_MIGRATION_LOCK = threading.Lock()
+_MIGRATED_NAMESPACES = set()
 
 DEFAULT_SETTINGS = {
     "max_cameras_per_admin": 10,
@@ -52,16 +55,38 @@ DEFAULT_SETTINGS = {
 
 
 def ensure_auth_data_dir():
-    """Compatibility no-op; the DB layer initializes its own runtime directory."""
-    return None
+    AUTH_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _read_legacy(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except Exception as exc:
+        logger.warning("Could not migrate legacy auth file %s: %s", path, exc)
+        return None
+
+
+def _migrate_namespace_once(namespace: str, path: Path) -> None:
+    if namespace in _MIGRATED_NAMESPACES:
+        return
+    with _MIGRATION_LOCK:
+        if namespace in _MIGRATED_NAMESPACES:
+            return
+        existing = get_kv_namespace(namespace)
+        if not existing:
+            legacy = _read_legacy(path)
+            if legacy:
+                set_kv_namespace(namespace, legacy)
+                logger.info("Migrated legacy %s into database namespace %s", path.name, namespace)
+        _MIGRATED_NAMESPACES.add(namespace)
 
 
 def atomic_write_json(path: Path, data: Dict[str, Any]):
-    """Legacy compatibility helper.
-
-    Known auth runtime documents are written to the database rather than disk.
-    Unknown paths are still written atomically so older optional modules keep working.
-    """
+    """Compatibility helper; known auth documents are persisted to the database."""
+    path = Path(path)
     name = path.name.lower()
     if name == "users.json":
         save_users(data)
@@ -81,12 +106,12 @@ def atomic_write_json(path: Path, data: Dict[str, Any]):
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, ensure_ascii=False)
+    temp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     temp_path.replace(path)
 
 
 def load_json(path: Path, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    path = Path(path)
     name = path.name.lower()
     if name == "users.json":
         return get_users()
@@ -103,27 +128,41 @@ def load_json(path: Path, default: Optional[Dict[str, Any]] = None) -> Dict[str,
     if not path.exists():
         return default or {}
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
+        return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, IOError):
         return default or {}
 
 
 def get_users() -> Dict[str, Any]:
+    _migrate_namespace_once("auth_users", USERS_FILE)
     return get_kv_namespace("auth_users")
 
 
 def save_users(users: Dict[str, Any]):
     set_kv_namespace("auth_users", users or {})
+    _MIGRATED_NAMESPACES.add("auth_users")
+
+
+def _settings_namespace(company_id: Optional[str]) -> str:
+    return "settings:global" if not company_id else f"settings:{company_id}"
 
 
 def get_settings(company_id: Optional[str] = None) -> Dict[str, Any]:
-    namespace = "settings:global" if not company_id else f"settings:{company_id}"
+    namespace = _settings_namespace(company_id)
+    if namespace not in _MIGRATED_NAMESPACES:
+        if company_id:
+            legacy_path = AUTH_DATA_DIR / f"settings_{company_id}.json"
+        else:
+            legacy_path = SETTINGS_FILE
+        legacy = _read_legacy(legacy_path)
+        if get_kv(namespace, "document", None) is None and legacy:
+            set_kv(namespace, "document", legacy)
+        _MIGRATED_NAMESPACES.add(namespace)
+
     stored = get_kv(namespace, "document", None)
     if not isinstance(stored, dict):
         return deepcopy(DEFAULT_SETTINGS)
 
-    # Deep merge so new production-safe options appear after an upgrade.
     result = deepcopy(DEFAULT_SETTINGS)
     for key, value in stored.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
@@ -134,12 +173,12 @@ def get_settings(company_id: Optional[str] = None) -> Dict[str, Any]:
 
 
 def save_settings(settings: Dict[str, Any], company_id: Optional[str] = None):
-    namespace = "settings:global" if not company_id else f"settings:{company_id}"
+    namespace = _settings_namespace(company_id)
     set_kv(namespace, "document", settings or {})
+    _MIGRATED_NAMESPACES.add(namespace)
 
 
 def get_cameras() -> Dict[str, Any]:
-    # Compatibility store used by old auth modules only. Main camera management now has a DB table.
     return get_kv_namespace("legacy_auth_cameras")
 
 
@@ -148,11 +187,13 @@ def save_cameras(cameras: Dict[str, Any]):
 
 
 def get_companies() -> Dict[str, Any]:
+    _migrate_namespace_once("companies", COMPANIES_FILE)
     return get_kv_namespace("companies")
 
 
 def save_companies(companies: Dict[str, Any]):
     set_kv_namespace("companies", companies or {})
+    _MIGRATED_NAMESPACES.add("companies")
 
 
 def _tokens_file() -> Path:
@@ -160,8 +201,10 @@ def _tokens_file() -> Path:
 
 
 def get_tokens() -> Dict[str, Any]:
+    _migrate_namespace_once("auth_tokens", _tokens_file())
     return get_kv_namespace("auth_tokens")
 
 
 def save_tokens(tokens: Dict[str, Any]):
     set_kv_namespace("auth_tokens", tokens or {})
+    _MIGRATED_NAMESPACES.add("auth_tokens")

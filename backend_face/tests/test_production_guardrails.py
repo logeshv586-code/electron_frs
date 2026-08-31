@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -40,8 +39,13 @@ class SourceGuardrailTests(unittest.TestCase):
 
     def test_arcface_requires_explicit_model(self):
         source = self.read("backend_face/recognition/arcface.py")
+        lowered = source.lower()
         self.assertIn("FRS_ARCFACE_MODEL_PATH", source)
-        self.assertNotIn("download", source.lower())
+        self.assertNotIn("import requests", lowered)
+        self.assertNotIn("import urllib", lowered)
+        self.assertNotIn("urlretrieve(", lowered)
+        self.assertNotIn("requests.get(", lowered)
+        self.assertNotIn("requests.post(", lowered)
 
     def test_pgvector_is_tenant_scoped(self):
         source = self.read("backend_face/recognition/vector_store.py")

@@ -8,7 +8,34 @@ def _center(bbox: Tuple[int, int, int, int]) -> Tuple[float, float]:
     return (float(x1 + x2) / 2.0, float(y1 + y2) / 2.0)
 
 
+def _hydrate_camera_info(info: Dict) -> Dict:
+    """Fill missing attendance geometry from the authoritative DB camera record.
+
+    Some legacy/manual stream-start routes pass only camera id/name. Mutating the same
+    stream info dictionary ensures both direction calculation and the later attendance
+    eligibility check see identical virtual-line configuration.
+    """
+    if all(info.get(key) is not None for key in ("line_x1", "line_y1", "line_x2", "line_y2")):
+        return info
+    camera_id = info.get("camera_id")
+    if camera_id is None:
+        return info
+    try:
+        from db.repository import get_camera
+        camera = get_camera(int(camera_id)) or {}
+        for key in (
+            "camera_role", "direction", "line_x1", "line_y1", "line_x2", "line_y2",
+            "in_side", "location", "site_id", "zone_id",
+        ):
+            if camera.get(key) is not None and info.get(key) is None:
+                info[key] = camera.get(key)
+    except Exception:
+        pass
+    return info
+
+
 def _line_points(info: Dict, frame_shape: Tuple[int, ...]) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    _hydrate_camera_info(info)
     try:
         values = [
             float(info.get("line_x1")), float(info.get("line_y1")),
@@ -24,6 +51,7 @@ def _line_points(info: Dict, frame_shape: Tuple[int, ...]) -> Optional[Tuple[Tup
 
 
 def has_virtual_line(info: Dict) -> bool:
+    _hydrate_camera_info(info)
     try:
         values = [float(info.get(key)) for key in ("line_x1", "line_y1", "line_x2", "line_y2")]
     except (TypeError, ValueError):
@@ -41,6 +69,7 @@ def update_track_direction(
     frame_shape: Tuple[int, ...],
     camera_info: Dict,
 ) -> str:
+    _hydrate_camera_info(camera_info)
     role = str(camera_info.get("camera_role") or "BIDIRECTIONAL").upper()
     configured = str(camera_info.get("direction") or "AUTO").upper()
     if role == "REFERENCE_ONLY":

@@ -9,7 +9,7 @@ import './AddCameraForm.css';
 const ROLE_OPTIONS = [
   { value: 'ENTRY', label: 'Entry', description: 'Can set the first attendance IN event.' },
   { value: 'EXIT', label: 'Exit', description: 'Can update the final attendance OUT event.' },
-  { value: 'BIDIRECTIONAL', label: 'Bidirectional', description: 'Uses first valid sighting as IN and later valid sightings as OUT.' },
+  { value: 'BIDIRECTIONAL', label: 'Bidirectional', description: 'Uses tracked virtual-line crossing to decide IN versus OUT.' },
   { value: 'REFERENCE_ONLY', label: 'Reference only', description: 'Stores recognition evidence but never changes attendance.' },
 ];
 
@@ -20,9 +20,17 @@ const roleDirection = (role) => {
   return 'AUTO';
 };
 
+const clampCoordinate = (value) => {
+  if (value === '' || value === null || value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(1, Math.max(0, parsed));
+};
+
 const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
   const { addCamera, updateCamera, removeCamera, collections = [], activeCollection } = useCameras();
   const token = useAuthStore((state) => state.token);
+  const currentUser = useAuthStore((state) => state.user);
   const [cameraName, setCameraName] = useState('');
   const [location, setLocation] = useState('');
   const [siteId, setSiteId] = useState('');
@@ -30,6 +38,11 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
   const [streamUrl, setStreamUrl] = useState('');
   const [cameraRole, setCameraRole] = useState('BIDIRECTIONAL');
   const [direction, setDirection] = useState('AUTO');
+  const [lineX1, setLineX1] = useState(0.5);
+  const [lineY1, setLineY1] = useState(0.1);
+  const [lineX2, setLineX2] = useState(0.5);
+  const [lineY2, setLineY2] = useState(0.9);
+  const [inSide, setInSide] = useState('POSITIVE');
   const [selectedCollection, setSelectedCollection] = useState(collectionId || activeCollection || 'default');
   const [error, setError] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -45,6 +58,11 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
       setStreamUrl(editingCamera.streamUrl || editingCamera.rtsp_url || '');
       setCameraRole(editingCamera.camera_role || 'BIDIRECTIONAL');
       setDirection(editingCamera.direction || roleDirection(editingCamera.camera_role || 'BIDIRECTIONAL'));
+      setLineX1(editingCamera.line_x1 ?? 0.5);
+      setLineY1(editingCamera.line_y1 ?? 0.1);
+      setLineX2(editingCamera.line_x2 ?? 0.5);
+      setLineY2(editingCamera.line_y2 ?? 0.9);
+      setInSide(editingCamera.in_side || 'POSITIVE');
       setSelectedCollection(editingCamera.collection_id || collectionId || activeCollection || 'default');
     } else {
       setCameraName('');
@@ -54,6 +72,11 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
       setStreamUrl('');
       setCameraRole('BIDIRECTIONAL');
       setDirection('AUTO');
+      setLineX1(0.5);
+      setLineY1(0.1);
+      setLineX2(0.5);
+      setLineY2(0.9);
+      setInSide('POSITIVE');
       setSelectedCollection(collectionId || activeCollection || 'default');
     }
     setError('');
@@ -100,6 +123,18 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
       return false;
     }
 
+    if (cameraRole === 'BIDIRECTIONAL' && direction === 'AUTO') {
+      const coordinates = [lineX1, lineY1, lineX2, lineY2].map(Number);
+      if (coordinates.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+        setError('Virtual-line coordinates must be between 0 and 1.');
+        return false;
+      }
+      if (Number(lineX1) === Number(lineX2) && Number(lineY1) === Number(lineY2)) {
+        setError('Virtual line must have two different points.');
+        return false;
+      }
+    }
+
     let extractedIP = trimmedUrl;
     if (!isCameraIndex) {
       extractedIP = extractIPFromStreamURL(trimmedUrl);
@@ -136,11 +171,17 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
     setValidationResult(null);
     if (!(await validateForm())) return;
 
+    const useVirtualLine = cameraRole === 'BIDIRECTIONAL' && direction === 'AUTO';
     const attendanceFields = {
       site_id: siteId.trim() || null,
       zone_id: zoneId.trim() || null,
       camera_role: cameraRole,
       direction,
+      line_x1: useVirtualLine ? clampCoordinate(lineX1) : null,
+      line_y1: useVirtualLine ? clampCoordinate(lineY1) : null,
+      line_x2: useVirtualLine ? clampCoordinate(lineX2) : null,
+      line_y2: useVirtualLine ? clampCoordinate(lineY2) : null,
+      in_side: useVirtualLine ? inSide : 'POSITIVE',
     };
 
     try {
@@ -165,7 +206,7 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
   };
 
   const handleDelete = async () => {
-    if (!editingCamera) return;
+    if (!editingCamera || currentUser?.role !== 'SuperAdmin') return;
     try {
       await removeCamera(editingCamera.id);
       setShowDeleteConfirm(false);
@@ -176,6 +217,7 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
   };
 
   const roleDescription = ROLE_OPTIONS.find((item) => item.value === cameraRole)?.description;
+  const showVirtualLine = cameraRole === 'BIDIRECTIONAL' && direction === 'AUTO';
 
   return (
     <div className="add-camera-form product-camera-form">
@@ -215,17 +257,31 @@ const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
           <span><strong>Direction: {direction}</strong> — {roleDescription}</span>
         </div>
 
+        {showVirtualLine && (
+          <div className="virtual-line-panel">
+            <div className="camera-form-section-title">Virtual crossing line</div>
+            <p className="field-help">Coordinates are normalized to the camera frame: 0 is top/left and 1 is bottom/right. The default creates a vertical center line.</p>
+            <div className="camera-form-grid three-column">
+              <label className="form-group"><span>Start X</span><input type="number" min="0" max="1" step="0.01" value={lineX1} onChange={(e) => setLineX1(e.target.value)} /></label>
+              <label className="form-group"><span>Start Y</span><input type="number" min="0" max="1" step="0.01" value={lineY1} onChange={(e) => setLineY1(e.target.value)} /></label>
+              <label className="form-group"><span>IN side</span><select value={inSide} onChange={(e) => setInSide(e.target.value)}><option value="POSITIVE">Positive side</option><option value="NEGATIVE">Negative side</option></select></label>
+              <label className="form-group"><span>End X</span><input type="number" min="0" max="1" step="0.01" value={lineX2} onChange={(e) => setLineX2(e.target.value)} /></label>
+              <label className="form-group"><span>End Y</span><input type="number" min="0" max="1" step="0.01" value={lineY2} onChange={(e) => setLineY2(e.target.value)} /></label>
+            </div>
+          </div>
+        )}
+
         {isValidating && <div className="validation-status">Validating stream and tenant configuration...</div>}
         {validationResult?.valid && <div className="validation-success">Camera configuration validated.</div>}
 
         <div className="form-actions camera-form-actions">
           <button type="submit" className="primary-button" disabled={isValidating}>{isValidating ? 'Validating...' : (editingCamera ? 'Save changes' : 'Add camera')}</button>
           <button type="button" className="cancel-button" onClick={onClose} disabled={isValidating}>Cancel</button>
-          {editingCamera && <button type="button" className="delete-button" onClick={() => setShowDeleteConfirm(true)} disabled={isValidating}><Trash2 size={14} /> Delete</button>}
+          {editingCamera && currentUser?.role === 'SuperAdmin' && <button type="button" className="delete-button" onClick={() => setShowDeleteConfirm(true)} disabled={isValidating}><Trash2 size={14} /> Delete</button>}
         </div>
       </form>
 
-      {showDeleteConfirm && (
+      {showDeleteConfirm && currentUser?.role === 'SuperAdmin' && (
         <div className="modal-overlay">
           <div className="modal-content delete-camera-modal">
             <h3>Delete camera?</h3>

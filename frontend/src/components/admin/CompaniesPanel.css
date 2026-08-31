@@ -1,0 +1,41 @@
+.companies-panel { width: 100%; color: var(--text-primary); }
+.companies-header { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:10px; }
+.companies-header h2 { margin:0; font-size:15px; font-weight:720; color:var(--text-primary); }
+.companies-header p { margin:4px 0 0; font-size:9.8px; color:var(--text-secondary); }
+.companies-actions { display:flex; gap:6px; }
+.company-primary,.company-secondary { height:32px; display:inline-flex; align-items:center; justify-content:center; gap:5px; padding:0 10px; border-radius:7px; cursor:pointer; font-size:9.7px; font-weight:650; }
+.company-primary { color:#fff; background:var(--primary-color); border:1px solid var(--primary-color); box-shadow:var(--shadow-sm); }
+.company-primary:hover { background:var(--primary-hover); }
+.company-secondary { color:var(--text-secondary); background:#fff; border:1px solid var(--border-color); }
+.company-secondary:hover { color:var(--primary-color); background:var(--primary-soft); }
+.companies-error { margin-bottom:9px; padding:8px 10px; font-size:9.5px; }
+.companies-table-shell { overflow:auto; border:1px solid var(--border-color); border-radius:9px; background:#fff; box-shadow:var(--shadow-sm); }
+.companies-table { width:100%; min-width:720px; border-collapse:collapse; }
+.companies-table th { height:34px; padding:0 10px; border-bottom:1px solid var(--border-color); text-align:left; }
+.companies-table td { height:43px; padding:6px 10px; border-bottom:1px solid #eef1f5; font-size:9.6px; color:#536176; }
+.companies-table tbody tr:last-child td { border-bottom:0; }
+.company-name-cell { display:flex; align-items:center; gap:8px; }
+.company-name-cell > span { width:27px; height:27px; display:grid; place-items:center; border-radius:7px; color:var(--primary-color); background:var(--primary-soft); }
+.company-name-cell strong { color:var(--text-primary); font-size:10px; font-weight:680; }
+.company-id-cell { font-family:"SFMono-Regular",Consolas,monospace; font-size:9px!important; color:#64748b!important; }
+.company-address { display:flex; align-items:center; gap:4px; }
+.company-row-actions { display:flex; justify-content:flex-end; gap:4px; }
+.company-row-actions button,.company-dialog-header button { width:27px; height:27px; display:grid; place-items:center; border:1px solid var(--border-color); border-radius:6px; background:#fff; color:var(--text-secondary); cursor:pointer; }
+.company-row-actions button:hover { color:var(--primary-color); background:var(--primary-soft); }
+.company-row-actions button.danger:hover { color:#bd3c4a; background:#fff5f6; border-color:#f1d1d5; }
+.companies-empty { min-height:190px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; padding:25px; color:var(--text-muted); font-size:9.5px; text-align:center; }
+.companies-empty strong { color:var(--text-primary); font-size:11px; }
+.companies-empty span { max-width:360px; line-height:1.5; }
+.company-dialog { width:min(430px,calc(100vw - 30px)); padding:16px; }
+.company-dialog-header { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:13px; }
+.company-dialog-header h3 { margin:0; font-size:13px; }
+.company-dialog-header p { margin:3px 0 0; color:var(--text-secondary); font-size:9.5px; }
+.company-dialog form { display:grid; gap:10px; }
+.company-dialog label { display:flex; flex-direction:column; gap:5px; }
+.company-dialog label > span { color:#536176; font-size:9.7px; font-weight:650; }
+.company-dialog label small { color:var(--text-muted); font-weight:500; }
+.company-dialog input,.company-dialog textarea { width:100%; border:1px solid var(--border-color); border-radius:7px; background:#fff; color:var(--text-primary); font-size:10px; }
+.company-dialog input { height:36px; padding:0 9px; }
+.company-dialog textarea { min-height:72px; padding:8px 9px; resize:vertical; }
+.company-dialog-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:4px; padding-top:11px; border-top:1px solid #eef1f5; }
+@media(max-width:650px){.companies-header{flex-direction:column}.companies-actions{width:100%}.companies-actions button{flex:1}}

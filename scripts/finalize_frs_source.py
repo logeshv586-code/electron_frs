@@ -1,8 +1,8 @@
 """Apply deterministic release source fixes before validation.
 
 The GitHub connector replaces whole UTF-8 files, so this idempotent script is used by
-CI for a few surgical edits in large backend modules. CI commits the result only after
-Python compilation and the React production build both pass.
+CI for a few surgical edits in large backend/frontend modules. CI commits the result only
+after Python compilation and the React production build both pass.
 """
 from pathlib import Path
 
@@ -44,6 +44,84 @@ def main() -> int:
         ROOT / "backend_face" / "main.py",
         '    await ws_manager.connect(websocket, company_id)\n    try:\n',
         '    if not await ws_manager.connect(websocket, company_id):\n        return\n    try:\n',
+    )
+
+    user_management = ROOT / "frontend" / "src" / "components" / "admin" / "UserManagement.js"
+
+    changed |= replace_once(
+        user_management,
+        """  const availableMenus = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'registration', label: 'Registration' },
+    { id: 'gallery', label: 'Gallery' },
+    { id: 'events', label: 'Events' },
+    { id: 'video', label: 'Video Processing' },
+    { id: 'camera', label: 'Camera Management' },
+    { id: 'stream-viewer', label: 'Stream Viewer' },
+    { id: 'users', label: 'User Management' },
+    { id: 'settings', label: 'Settings' },
+  ];
+
+  const { user: currentUser, token } = useAuthStore();
+""",
+        """  const availableMenus = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'registration', label: 'Employees' },
+    { id: 'matching', label: 'Face Matching' },
+    { id: 'gallery', label: 'Face Gallery' },
+    { id: 'events', label: 'Recognition Events' },
+    { id: 'attendance', label: 'Attendance & Reports' },
+    { id: 'holiday-calendar', label: 'Holiday Calendar' },
+    { id: 'camera', label: 'Camera Management' },
+    { id: 'stream-viewer', label: 'Live View' },
+    { id: 'video', label: 'Video Processing' },
+    { id: 'users', label: 'User Management' },
+    { id: 'settings', label: 'Settings' },
+    { id: 'backup', label: 'Backup' },
+  ];
+
+  const { user: currentUser, token } = useAuthStore();
+  const supervisorCapableMenus = new Set(['dashboard', 'registration', 'events', 'attendance', 'camera', 'stream-viewer']);
+  const normalizedCurrentMenus = new Set((currentUser?.assigned_menus || []).map((menu) => {
+    if (menu === 'cameras') return 'camera';
+    if (menu === 'attendance-report' || menu === 'day-report' || menu === 'week-report' || menu === 'month-report') return 'attendance';
+    return menu;
+  }));
+  const assignableMenus = currentUser?.role === 'SuperAdmin'
+    ? availableMenus
+    : availableMenus.filter((menu) => supervisorCapableMenus.has(menu.id) && (normalizedCurrentMenus.size === 0 || normalizedCurrentMenus.has(menu.id)));
+""",
+    )
+
+    changed |= replace_once(
+        user_management,
+        """                        <button className="action-btn delete" onClick={() => handleDelete(user.username)} title="Delete">
+                          <Trash2 size={16} />
+                        </button>
+""",
+        """                        {currentUser.role === 'SuperAdmin' && (
+                          <button className="action-btn delete" onClick={() => handleDelete(user.username)} title="Delete permanently">
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+""",
+    )
+
+    changed |= replace_once(
+        user_management,
+        """                          required={!isEditing}
+                          placeholder={isEditing ? "Leave blank to keep current" : "Enter password"}
+""",
+        """                          required={!isEditing}
+                          minLength={12}
+                          placeholder={isEditing ? "Leave blank to keep current" : "Minimum 12 characters"}
+""",
+    )
+
+    changed |= replace_once(
+        user_management,
+        "{availableMenus.map(menu => {",
+        "{assignableMenus.map(menu => {",
     )
 
     print("source fixes applied" if changed else "source fixes already present")

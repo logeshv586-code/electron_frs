@@ -1,325 +1,159 @@
-# fr1.py
 # -*- coding: utf-8 -*-
-"""
-Webcam / RTSP face detection (InsightFace SCRFD) + recognition (face_recognition).
-Configured for long-distance detection:
-  - INSIGHT_DET_SIZE bumped to (1280, 1280) — detects much smaller faces
-  - HOG face location model replaced with CNN for better long-distance results
-  - Embedding cache keyed by mtime so new training images are picked up instantly
+"""Face-template loading utilities used by the live recognition pipeline.
+
+The old implementation generated enrollment augmentations under data/<company>/<person>
+but live recognition primarily read data/gallery/<company>/<person>.  This module makes
+the database face-template bank authoritative and imports gallery images only as a
+backward-compatibility source.  Registration and live recognition therefore use the
+same embeddings.
 """
 
-import os
+from __future__ import annotations
+
 import glob
-import time
-from typing import List, Tuple, Optional
+import logging
+import os
+from pathlib import Path
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 import face_recognition
 
-try:
-    from insightface.app import FaceAnalysis
-except Exception as e:
-    raise ImportError("insightface is required. Install with: pip install insightface") from e
+from db.repository import (
+    append_face_templates,
+    get_person,
+    load_face_templates,
+    migrate_legacy_metadata,
+    upsert_person,
+)
 
-# ─────────────────────── Configuration ─────────────────────────────────────
+logger = logging.getLogger(__name__)
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-CAMERA_INDEX = 0
-
-TOLERANCE            = 0.48   # tighter threshold → fewer false positives
-FRAME_DISPLAY_SCALE  = 1.0
-
-# ── Long-distance settings ──────────────────────────────────────────────────
-#   Larger det_size = InsightFace processes the image at higher resolution
-#   → detects smaller faces (people farther away from the camera).
-#   (640,640) is default; (1280,1280) detects roughly 4× smaller faces.
-INSIGHT_CTX      = 0               # -1=CPU, 0=GPU
-INSIGHT_DET_SIZE = (1280, 1280)    # ← CHANGED from (640,640) for long-distance
-
-# Minimum face pixel size to accept (long-distance people have small boxes)
-MIN_FACE_PX = 20   # ← was 50-60; now accepts faces 10 m+ away
-
-IGNORE_FOLDERS = {
-    "gallery", "auth", "camera_management",
-    "temp_bulk", "__pycache__", ".ipynb_checkpoints"
-}
-# ───────────────────────────────────────────────────────────────────────────
+TOLERANCE = float(os.getenv("FACE_MATCH_DISTANCE", "0.46"))
 
 
-def load_known_faces(data_dir: str,
-                     company_id: Optional[str] = None
-                     ) -> Tuple[List[np.ndarray], List[str]]:
-    """
-    Load (and cache) 128-d face embeddings from the gallery directory.
+def _quality_score(image_bgr: np.ndarray) -> float:
+    if image_bgr is None or image_bgr.size == 0:
+        return 0.0
+    h, w = image_bgr.shape[:2]
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    sharp = min(float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 500.0, 1.0)
+    brightness = float(np.mean(gray))
+    exposure = 1.0 - min(abs(brightness - 128.0) / 128.0, 1.0)
+    size = min((min(h, w) / 160.0), 1.0)
+    return float(np.clip(sharp * 0.5 + exposure * 0.25 + size * 0.25, 0.0, 1.0))
 
-    Uses a per-company pickle cache keyed by image mtime, so:
-      - First run: computes all embeddings (slow)
-      - Subsequent runs: cache hit (fast)
-      - New / modified images: automatically recomputed
-    """
-    import pickle
 
-    known_encodings: List[np.ndarray] = []
-    known_names:     List[str]        = []
-
-    company_id_to_use = company_id or "default"
-    cache_name  = f"embeddings_cache_{company_id_to_use}.pkl"
-    cache_path  = os.path.join(data_dir, cache_name)
-    cache: dict = {}
-
-    if os.path.exists(cache_path):
+def encode_face_image(image_bgr: np.ndarray, num_jitters: int = 2) -> Optional[np.ndarray]:
+    """Return one dlib 128-D embedding from a single-face image."""
+    if image_bgr is None or image_bgr.size == 0:
+        return None
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    locations = face_recognition.face_locations(rgb, model="hog")
+    if not locations:
         try:
-            with open(cache_path, "rb") as f:
-                cache = pickle.load(f)
-            print(f"[INFO] Loaded {len(cache)} entries from cache ({company_id_to_use})")
-        except Exception as e:
-            print(f"[WARN] Cache load failed, rebuilding: {e}")
-            cache = {}
-
-    if not os.path.isdir(data_dir):
-        raise ValueError(f"Data directory does not exist: {data_dir}")
-
-    gallery_dir = os.path.join(data_dir, "gallery", company_id_to_use)
-    if not os.path.exists(gallery_dir):
-        print(f"[WARN] Gallery not found for company '{company_id_to_use}': {gallery_dir}")
-        return [], []
-
-    person_dirs = [
-        d for d in sorted(os.listdir(gallery_dir))
-        if os.path.isdir(os.path.join(gallery_dir, d)) and d not in IGNORE_FOLDERS
-    ]
-    print(f"[INFO] {len(person_dirs)} person(s) in {gallery_dir}")
-
-    current_files: set = set()
-    new_computations   = 0
-
-    for person in person_dirs:
-        files = [
-            f for f in glob.glob(os.path.join(gallery_dir, person, "*"))
-            if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp"))
-        ]
-        if not files:
-            continue
-
-        for img_path in files:
-            current_files.add(img_path)
-            try:
-                mtime = os.path.getmtime(img_path)
-
-                # Cache hit
-                if img_path in cache and cache[img_path]["mtime"] == mtime:
-                    for enc in cache[img_path]["encodings"]:
-                        known_encodings.append(enc)
-                        known_names.append(person)
-                    continue
-
-                # Cache miss — compute encoding
-                probe = cv2.imread(img_path)
-                if probe is None or probe.size == 0:
-                    cache.pop(img_path, None)
-                    print(f"[WARN] Invalid image file {img_path} — skipping")
-                    continue
-
-                img = face_recognition.load_image_file(img_path)
-
-                # Try HOG first (fast); fall back to CNN for long-distance/small faces
-                locations = face_recognition.face_locations(img, model="hog")
-                if not locations:
-                    locations = face_recognition.face_locations(img, model="cnn")
-                if not locations:
-                    print(f"[WARN] No face in {img_path} — skipping")
-                    continue
-
-                encs = face_recognition.face_encodings(
-                    img,
-                    known_face_locations=locations,
-                    num_jitters=2,    # 2 jitters for better embedding quality
-                    model='large'     # must match face_pipeline.py
-                )
-                if not encs:
-                    print(f"[WARN] Could not encode {img_path}")
-                    continue
-
-                for enc in encs:
-                    known_encodings.append(enc)
-                    known_names.append(person)
-
-                cache[img_path] = {"mtime": mtime, "encodings": encs, "name": person}
-                new_computations += 1
-                print(f"[INFO] Encoded {img_path} -> {person}")
-
-            except Exception as e:
-                print(f"[ERROR] Failed on {img_path}: {e}")
-
-    # Purge deleted files from cache
-    deleted = [p for p in cache if p not in current_files]
-    for p in deleted:
-        del cache[p]
-    if deleted:
-        print(f"[INFO] Purged {len(deleted)} stale cache entries")
-
-    if new_computations or deleted:
-        try:
-            with open(cache_path, "wb") as f:
-                pickle.dump(cache, f)
-            print(f"[INFO] Saved cache ({len(cache)} entries)")
-        except Exception as e:
-            print(f"[ERROR] Could not save cache: {e}")
-
-    print(f"[INFO] Total encodings: {len(known_encodings)} | New: {new_computations}")
-    return known_encodings, known_names
-
-
-def prepare_insightface(ctx: int = INSIGHT_CTX,
-                        det_size: Tuple[int, int] = INSIGHT_DET_SIZE) -> FaceAnalysis:
-    """Prepare InsightFace detector for long-distance use."""
-    try:
-        import onnxruntime as ort
-        print("[INFO] ONNX providers:", ort.get_available_providers())
-    except Exception:
-        pass
-
-    app = FaceAnalysis(allowed_modules=['detection'])
-    app.prepare(ctx_id=ctx, det_size=det_size)
-    print(f"[INFO] InsightFace ready | ctx={ctx} | det_size={det_size}")
-    return app
-
-
-def recognize_frame_insight(frame_bgr: np.ndarray,
-                             app: FaceAnalysis,
-                             known_encodings: List[np.ndarray],
-                             known_names: List[str]) -> np.ndarray:
-    """
-    Run long-distance detection + recognition on a single frame.
-    Upscales small face crops before encoding for better accuracy.
-    """
-    if frame_bgr is None:
-        return frame_bgr
-
-    orig_h, orig_w = frame_bgr.shape[:2]
-
-    # CLAHE to help with dim / far-away cameras
-    lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
-
-    faces = app.get(enhanced)
-
-    for f in faces:
-        try:
-            x1, y1, x2, y2 = map(int, f.bbox)
+            locations = face_recognition.face_locations(rgb, model="cnn")
         except Exception:
-            bx = f.bbox
-            if len(bx) < 4:
+            locations = []
+    if not locations:
+        return None
+    # Enrollment/template files must contain exactly one usable identity. If several
+    # faces are present, use the largest but log the condition for operator review.
+    location = max(locations, key=lambda r: max(1, r[2] - r[0]) * max(1, r[1] - r[3]))
+    encodings = face_recognition.face_encodings(
+        rgb,
+        known_face_locations=[location],
+        num_jitters=max(1, int(num_jitters)),
+        model="large",
+    )
+    return encodings[0].astype(np.float64) if encodings else None
+
+
+def _import_gallery_into_database(data_dir: str, company_id: str) -> int:
+    gallery_root = Path(data_dir) / "gallery" / company_id
+    if not gallery_root.exists():
+        return 0
+
+    imported = 0
+    for person_dir in sorted(p for p in gallery_root.iterdir() if p.is_dir()):
+        person_key = person_dir.name.strip().lower()
+        person = get_person(company_id, person_key)
+        if not person:
+            person = upsert_person(company_id, person_key, {
+                "name": person_dir.name,
+                "status": "Active",
+                "category": "Employee",
+                "photo_path": str((person_dir / "1.jpg").relative_to(Path(data_dir).parent)).replace("\\", "/")
+                    if (person_dir / "1.jpg").exists() else None,
+                "gallery_path": str(person_dir.relative_to(Path(data_dir).parent)).replace("\\", "/"),
+                "created_by": "legacy-migration",
+            })
+
+        templates = []
+        for image_path in sorted(person_dir.glob("*")):
+            if image_path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
                 continue
-            x1, y1, x2, y2 = int(bx[0]), int(bx[1]), int(bx[2]), int(bx[3])
-
-        x1 = max(0, min(orig_w - 1, x1))
-        x2 = max(0, min(orig_w - 1, x2))
-        y1 = max(0, min(orig_h - 1, y1))
-        y2 = max(0, min(orig_h - 1, y2))
-
-        fw, fh = x2 - x1, y2 - y1
-        if fw < MIN_FACE_PX or fh < MIN_FACE_PX:
-            continue
-
-        # Crop and upscale small faces before encoding
-        crop_bgr = frame_bgr[y1:y2, x1:x2]
-        target   = 112
-        short    = min(fw, fh)
-        if short < target:
-            scale    = target / short
-            crop_bgr = cv2.resize(
-                crop_bgr,
-                (max(target, int(fw * scale)), max(target, int(fh * scale))),
-                interpolation=cv2.INTER_LANCZOS4
-            )
-
-        crop_rgb  = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-        ch, cw    = crop_rgb.shape[:2]
-        crop_loc  = [(0, cw - 1, ch - 1, 0)]
-
-        try:
-            encs = face_recognition.face_encodings(
-                crop_rgb,
-                known_face_locations=crop_loc,
-                num_jitters=1,
-                model='large'
-            )
-        except Exception:
-            encs = []
-
-        name = "Unknown"
-        dist = None
-
-        if encs and known_encodings:
-            dists    = face_recognition.face_distance(known_encodings, encs[0])
-            best_idx = int(np.argmin(dists))
-            best_d   = float(dists[best_idx])
-            dist     = best_d
-            if best_d <= TOLERANCE:
-                name = known_names[best_idx]
-
-        color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-        cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), color, 2)
-
-        conf    = getattr(f, "det_score", None) or getattr(f, "score", None)
-        parts   = [name]
-        if dist  is not None: parts.append(f"d={dist:.2f}")
-        if conf  is not None: parts.append(f"det={conf:.2f}")
-        parts.append(f"{fw}x{fh}px")   # show face size for distance debugging
-
-        label   = " | ".join(parts)
-        label_y = y1 - 10 if y1 - 10 > 10 else y2 + 20
-        cv2.putText(frame_bgr, label, (x1, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
-
-    return frame_bgr
+            image = cv2.imread(str(image_path))
+            embedding = encode_face_image(image, num_jitters=2)
+            if embedding is None:
+                continue
+            template_key = f"gallery:{image_path.name}:{int(image_path.stat().st_mtime)}"
+            templates.append((
+                template_key,
+                embedding,
+                str(image_path),
+                _quality_score(image),
+            ))
+        if templates:
+            imported += append_face_templates(company_id, person_key, templates)
+    return imported
 
 
-def main():
-    print("[INFO] Loading known faces ...")
-    known_encodings, known_names = load_known_faces(DATA_DIR)
-    if not known_encodings:
-        print("[ERROR] No known faces found. Add images to data/gallery/<company>/<name>/")
-        return
+def load_known_faces(
+    data_dir: str,
+    company_id: Optional[str] = None,
+) -> Tuple[List[np.ndarray], List[str]]:
+    """Load the tenant's authoritative enrollment embeddings.
 
-    app = prepare_insightface(ctx=INSIGHT_CTX, det_size=INSIGHT_DET_SIZE)
-
-    print(f"[INFO] Opening camera {CAMERA_INDEX} ...")
-    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        print(f"[ERROR] Cannot open camera {CAMERA_INDEX}")
-        return
-
-    # High resolution capture for maximum long-distance detection
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-
-    print("[INFO] Press 'q' to quit.")
+    For a fresh upgraded installation the function imports legacy metadata/gallery files
+    one time. Subsequent calls read compact binary embeddings from the database and avoid
+    re-encoding thousands of JPEGs on every startup.
+    """
+    company_id = str(company_id or "default")
+    metadata_file = os.path.join(data_dir, "metadata.json")
     try:
-        while True:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                time.sleep(0.01)
-                continue
+        migrate_legacy_metadata(metadata_file)
+    except Exception as exc:
+        logger.warning("Legacy person metadata migration skipped: %s", exc)
 
-            annotated = recognize_frame_insight(frame, app, known_encodings, known_names)
+    matrix, names, _ = load_face_templates(company_id)
+    if matrix.shape[0] == 0:
+        try:
+            imported = _import_gallery_into_database(data_dir, company_id)
+            if imported:
+                logger.info("Imported %s legacy gallery templates for %s", imported, company_id)
+            matrix, names, _ = load_face_templates(company_id)
+        except Exception as exc:
+            logger.error("Failed importing gallery templates for %s: %s", company_id, exc)
 
-            if FRAME_DISPLAY_SCALE != 1.0:
-                annotated = cv2.resize(annotated, (0, 0), fx=FRAME_DISPLAY_SCALE, fy=FRAME_DISPLAY_SCALE)
+    return [row.astype(np.float64) for row in matrix], list(names)
 
-            cv2.imshow("Long-Distance Face Recognition | press Q to quit", annotated)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-    except KeyboardInterrupt:
-        print("\n[INFO] Interrupted")
-    finally:
-        cap.release()
-        cv2.destroyAllWindows()
+
+def person_template_summary(data_dir: str, company_id: Optional[str] = None) -> dict:
+    company_id = str(company_id or "default")
+    matrix, names, _ = load_face_templates(company_id)
+    counts = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    return {
+        "company_id": company_id,
+        "template_count": int(matrix.shape[0]),
+        "people": counts,
+    }
 
 
 if __name__ == "__main__":
-    main()
+    encodings, names = load_known_faces(DATA_DIR, company_id="default")
+    print(f"Loaded {len(encodings)} templates across {len(set(names))} people")

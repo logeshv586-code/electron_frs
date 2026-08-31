@@ -54,6 +54,10 @@ jobs:
       - name: Check source whitespace
         run: git diff --check
 
+      - name: Synchronize npm lockfile
+        working-directory: frontend
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci --no-audit --no-fund

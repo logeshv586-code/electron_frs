@@ -43,8 +43,10 @@ uvloop; platform_system != 'Windows'
 watchfiles
 websockets
 redis
+psycopg[binary]
+pgvector
+boto3
 setuptools
-xhtml2pdf 
+xhtml2pdf
 PyQt6
 ultralytics
-opencv-python

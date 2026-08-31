@@ -10,6 +10,7 @@ from pydantic import BaseModel, field_validator
 
 CAMERA_ROLES = {"ENTRY", "EXIT", "BIDIRECTIONAL", "REFERENCE_ONLY"}
 CAMERA_DIRECTIONS = {"IN", "OUT", "AUTO", "NONE"}
+CAMERA_IN_SIDES = {"POSITIVE", "NEGATIVE"}
 
 
 class CameraCollection(BaseModel):
@@ -73,6 +74,11 @@ class EnhancedCamera(BaseModel):
     zone_id: Optional[str] = None
     camera_role: str = "BIDIRECTIONAL"
     direction: str = "AUTO"
+    line_x1: Optional[float] = None
+    line_y1: Optional[float] = None
+    line_x2: Optional[float] = None
+    line_y2: Optional[float] = None
+    in_side: str = "POSITIVE"
     status: str = "inactive"
     created_at: datetime
     last_seen: Optional[datetime] = None
@@ -90,6 +96,11 @@ class CameraCreateRequest(BaseModel):
     zone_id: Optional[str] = None
     camera_role: str = "BIDIRECTIONAL"
     direction: str = "AUTO"
+    line_x1: Optional[float] = None
+    line_y1: Optional[float] = None
+    line_x2: Optional[float] = None
+    line_y2: Optional[float] = None
+    in_side: str = "POSITIVE"
     company_id: Optional[str] = None
 
     @field_validator("rtsp_url")
@@ -132,6 +143,24 @@ class CameraCreateRequest(BaseModel):
             raise ValueError(f"direction must be one of {sorted(CAMERA_DIRECTIONS)}")
         return value
 
+    @field_validator("line_x1", "line_y1", "line_x2", "line_y2")
+    @classmethod
+    def validate_line_coordinate(cls, value: Optional[float]):
+        if value is None:
+            return value
+        value = float(value)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Virtual-line coordinates must be normalized between 0 and 1")
+        return value
+
+    @field_validator("in_side")
+    @classmethod
+    def validate_in_side(cls, value: str):
+        value = (value or "POSITIVE").upper()
+        if value not in CAMERA_IN_SIDES:
+            raise ValueError(f"in_side must be one of {sorted(CAMERA_IN_SIDES)}")
+        return value
+
 
 class CameraUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -142,6 +171,11 @@ class CameraUpdateRequest(BaseModel):
     zone_id: Optional[str] = None
     camera_role: Optional[str] = None
     direction: Optional[str] = None
+    line_x1: Optional[float] = None
+    line_y1: Optional[float] = None
+    line_x2: Optional[float] = None
+    line_y2: Optional[float] = None
+    in_side: Optional[str] = None
 
     @field_validator("rtsp_url")
     @classmethod
@@ -170,6 +204,18 @@ class CameraUpdateRequest(BaseModel):
         if value is None:
             return value
         return CameraCreateRequest.validate_direction(value)
+
+    @field_validator("line_x1", "line_y1", "line_x2", "line_y2")
+    @classmethod
+    def validate_line_coordinate(cls, value: Optional[float]):
+        return CameraCreateRequest.validate_line_coordinate(value)
+
+    @field_validator("in_side")
+    @classmethod
+    def validate_in_side(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return CameraCreateRequest.validate_in_side(value)
 
 
 class CameraListResponse(BaseModel):

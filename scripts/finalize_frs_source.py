@@ -46,6 +46,63 @@ def main() -> int:
         '    if not await ws_manager.connect(websocket, company_id):\n        return\n    try:\n',
     )
 
+    event_api = ROOT / "backend_face" / "event" / "event_api.py"
+    changed |= replace_once(
+        event_api,
+        """def _filter_assigned_cameras(request: Request, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    assigned = _user(request).get("assigned_cameras") or []
+    if not assigned or _user(request).get("role") == "SuperAdmin":
+        return events
+    allowed = {str(value).lower() for value in assigned}
+    return [
+        event for event in events
+        if str(event.get("camera_id") or "").lower() in allowed
+        or str(event.get("camera_name") or "").lower() in allowed
+    ]
+""",
+        """def _filter_assigned_cameras(request: Request, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    user = _user(request)
+    role = user.get("role")
+    if role in {"SuperAdmin", "Admin"}:
+        return events
+    assigned = user.get("assigned_cameras") or []
+    if not assigned:
+        return []
+    allowed = {str(value).lower() for value in assigned}
+    return [
+        event for event in events
+        if str(event.get("camera_id") or "").lower() in allowed
+        or str(event.get("camera_name") or "").lower() in allowed
+    ]
+""",
+    )
+
+    changed |= replace_once(
+        event_api,
+        """@router.get("/cameras")
+async def event_cameras(request: Request):
+    tenant = _tenant(request, allow_all_superadmin=True)
+    if tenant is None:
+        rows = fetch_all("SELECT DISTINCT name FROM cameras WHERE name IS NOT NULL ORDER BY name")
+    else:
+        rows = fetch_all("SELECT DISTINCT name FROM cameras WHERE company_id=? AND name IS NOT NULL ORDER BY name", (tenant,))
+    return {"cameras": [row["name"] for row in rows]}
+""",
+        """@router.get("/cameras")
+async def event_cameras(request: Request):
+    tenant = _tenant(request, allow_all_superadmin=True)
+    user = _user(request)
+    if tenant is None:
+        rows = fetch_all("SELECT DISTINCT id,name FROM cameras WHERE name IS NOT NULL ORDER BY name")
+    else:
+        rows = fetch_all("SELECT DISTINCT id,name FROM cameras WHERE company_id=? AND name IS NOT NULL ORDER BY name", (tenant,))
+    if user.get("role") == "Supervisor":
+        assigned = {str(value).lower() for value in user.get("assigned_cameras") or []}
+        rows = [row for row in rows if str(row.get("id") or "").lower() in assigned or str(row.get("name") or "").lower() in assigned]
+    return {"cameras": [row["name"] for row in rows]}
+""",
+    )
+
     user_management = ROOT / "frontend" / "src" / "components" / "admin" / "UserManagement.js"
 
     changed |= replace_once(

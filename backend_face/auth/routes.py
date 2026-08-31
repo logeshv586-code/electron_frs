@@ -1,21 +1,28 @@
+from __future__ import annotations
+
 import logging
+import os
 from datetime import timedelta, datetime, timezone
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, Request
-from pydantic import BaseModel
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
 from .security import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from .users import create_user, get_user, list_users
+from .users import create_user, get_user, list_users, update_user
 from .storage import ensure_auth_data_dir, get_tokens, save_tokens
 from .license_dates import parse_license_datetime
+from db.repository import create_password_reset_token, consume_password_reset_token, write_audit
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
 
 class LoginRequest(BaseModel):
     username: str
     password: str
     role: Optional[str] = None
+
 
 class LoginResponse(BaseModel):
     access_token: str
@@ -27,18 +34,23 @@ class LoginResponse(BaseModel):
     license_start_date: Optional[str] = None
     license_end_date: Optional[str] = None
     company_id: Optional[str] = None
+    expires_in: int
+
 
 class BootstrapSuperAdminRequest(BaseModel):
     username: str
-    password: str
+    password: str = Field(min_length=8)
+
 
 class ForgotPasswordRequest(BaseModel):
     username: str
 
+
 class ResetPasswordRequest(BaseModel):
     username: str
-    token: str # Simple token check for now
-    new_password: str
+    token: str
+    new_password: str = Field(min_length=8)
+
 
 class UserResponse(BaseModel):
     username: str
@@ -53,61 +65,51 @@ class UserResponse(BaseModel):
     license_start_date: Optional[str] = None
     license_end_date: Optional[str] = None
 
+
 @router.post("/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
     ensure_auth_data_dir()
-    
-    # Special handling for SuperAdmin - allow login without role matching
     user = get_user(request.username)
-    
-    # Auto-discover role if not provided
-    effective_role = request.role
-    if not effective_role and user:
-        effective_role = user.get("role")
-        logger.info(f"Auto-discovered role '{effective_role}' for user '{request.username}'")
+    effective_role = request.role or (user.get("role") if user else None)
+    if not effective_role:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if user and user["role"] == "SuperAdmin":
-        # For SuperAdmin, authenticate without role check
-        auth_user = authenticate_user(request.username, request.password, user["role"])
-    else:
-        # For other roles, require exact role match
-        if not effective_role:
-             raise HTTPException(status_code=400, detail="Role selection required for this user")
-        auth_user = authenticate_user(request.username, request.password, effective_role)
-    
+    auth_user = authenticate_user(request.username, request.password, effective_role)
     if not auth_user:
+        write_audit("LOGIN_FAILED", username=request.username)
         raise HTTPException(status_code=401, detail="Invalid credentials or role")
-    
-    # Enforce Admin license expiry at login
-    if auth_user["role"] == "Admin":
+
+    if auth_user.get("role") == "Admin":
         end_str = auth_user.get("license_end_date")
         if end_str:
             end_dt = parse_license_datetime(end_str)
-            now = datetime.now(timezone.utc)
-            if end_dt and end_dt < now:
+            if end_dt and end_dt < datetime.now(timezone.utc):
                 raise HTTPException(status_code=403, detail="License expired. Contact SuperAdmin.")
-    
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    token_data = {
-        "sub": auth_user["username"], 
-        "role": auth_user["role"],
-        "company_id": auth_user.get("company_id")
-    }
+
+    expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data=token_data,
-        expires_delta=access_token_expires
+        data={
+            "sub": auth_user["username"],
+            "role": auth_user["role"],
+            "company_id": auth_user.get("company_id"),
+        },
+        expires_delta=expires,
     )
-    
-    # Register active token
     tokens = get_tokens()
     tokens[access_token] = {
         "username": auth_user["username"],
         "role": auth_user["role"],
         "company_id": auth_user.get("company_id"),
-        "issued_at": int(datetime.now(timezone.utc).timestamp())
+        "issued_at": int(datetime.now(timezone.utc).timestamp()),
+        "expires_at": int((datetime.now(timezone.utc) + expires).timestamp()),
     }
     save_tokens(tokens)
-    
+    write_audit(
+        "LOGIN_SUCCESS",
+        username=auth_user["username"],
+        company_id=auth_user.get("company_id"),
+    )
+
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
@@ -117,15 +119,16 @@ async def login(request: LoginRequest):
         assigned_menus=auth_user.get("assigned_menus", auth_user.get("menus", [])),
         license_start_date=auth_user.get("license_start_date"),
         license_end_date=auth_user.get("license_end_date"),
-        company_id=auth_user.get("company_id")
+        company_id=auth_user.get("company_id"),
+        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
+
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(request: Request):
     user = request.scope.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     return UserResponse(
         username=user["username"],
         role=user["role"],
@@ -137,84 +140,98 @@ async def get_current_user(request: Request):
         max_cameras_limit=user.get("max_cameras_limit", 0),
         company_id=user.get("company_id"),
         license_start_date=user.get("license_start_date"),
-        license_end_date=user.get("license_end_date")
+        license_end_date=user.get("license_end_date"),
     )
+
 
 @router.post("/bootstrap/superadmin")
 async def bootstrap_superadmin(request: BootstrapSuperAdminRequest):
-    """Create initial SuperAdmin user if none exists"""
     ensure_auth_data_dir()
-    
-    # Check if any SuperAdmin already exists
-    users = list_users()
-    superadmin_exists = any(user["role"] == "SuperAdmin" for user in users)
-    
-    if superadmin_exists:
+    if any(user.get("role") == "SuperAdmin" for user in list_users()):
         raise HTTPException(status_code=400, detail="SuperAdmin already exists")
-    
-    # Create SuperAdmin user
     superadmin = create_user(
         username=request.username,
         password=request.password,
         role="SuperAdmin",
-        created_by="system"
+        created_by="system",
     )
-    
+    write_audit("SUPERADMIN_BOOTSTRAPPED", username=superadmin["username"])
     return {"message": "SuperAdmin created successfully", "username": superadmin["username"]}
+
 
 @router.post("/logout")
 async def logout(request: Request):
-    # Revoke current token server-side
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         tokens = get_tokens()
-        if token in tokens:
-            del tokens[token]
-            save_tokens(tokens)
-            return {"message": "Logout successful"}
+        token_info = tokens.pop(token, None)
+        save_tokens(tokens)
+        if token_info:
+            write_audit(
+                "LOGOUT",
+                username=token_info.get("username"),
+                company_id=token_info.get("company_id"),
+            )
     return {"message": "Logout successful"}
+
 
 @router.post("/forgot-password")
 async def forgot_password(request: ForgotPasswordRequest):
+    # Deliberately do not reveal whether the account exists.
     user = get_user(request.username)
-    if not user:
-        # Don't reveal user existence for security, but logs will help
-        logger.info(f"Forgot password requested for non-existent user: {request.username}")
-        return {"message": "If an email is associated with this account, instructions have been sent."}
-    
-    email = user.get("email")
-    if not email:
-        logger.warn(f"User {request.username} requested password reset but has no email configured.")
-        return {"message": "No email associated with this account. Please contact your Admin."}
-    
-    # Simple token for demonstration: username_timestamp_reset
-    token = f"{request.username}_{int(datetime.now(timezone.utc).timestamp())}_reset"
-    
-    # In a real app, you'd store this token with an expiry
-    # For now, we'll just log it and send a simulated email
+    generic = "If the account exists and has an email, a one-time reset token has been sent."
+    if not user or not user.get("email"):
+        return {"message": generic}
+
+    token = create_password_reset_token(request.username, ttl_minutes=15)
     from .email_utils import send_email
-    subject = "Password Reset Request"
-    body = f"Hello {request.username},\n\nYou requested a password reset. Use the following token to reset your password: {token}\n\nIf you did not request this, please ignore this email."
-    
-    if send_email(email, subject, body):
-        return {"message": "Reset instructions sent to your email."}
-    else:
-        # Fallback for dev/unconfigured SMTP
-        return {"message": "Reset token generated (simulated): " + token}
+
+    body = (
+        f"Hello {request.username},\n\n"
+        f"Your Face Recognition System one-time password reset token is:\n\n{token}\n\n"
+        "This token expires in 15 minutes and can be used only once. "
+        "If you did not request this reset, you can ignore this message."
+    )
+    sent = send_email(user["email"], "FRS password reset token", body)
+    write_audit(
+        "PASSWORD_RESET_REQUESTED",
+        username=request.username,
+        company_id=user.get("company_id"),
+        details={"email_sent": bool(sent)},
+    )
+
+    response = {"message": generic}
+    if os.getenv("FRS_DEV_SHOW_RESET_TOKEN", "0").lower() in {"1", "true", "yes"}:
+        response["dev_token"] = token
+    return response
+
 
 @router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest):
     user = get_user(request.username)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Basic token validation (in production, use a secure signed token or DB lookup)
-    if not request.token.startswith(request.username) or "_reset" not in request.token:
-        raise HTTPException(status_code=400, detail="Invalid reset token")
-    
-    from .users import update_user
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if not consume_password_reset_token(request.username, request.token):
+        write_audit(
+            "PASSWORD_RESET_FAILED",
+            username=request.username,
+            company_id=user.get("company_id"),
+        )
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
     update_user(request.username, {"password": request.new_password})
-    logger.info(f"Password reset successful for user: {request.username}")
-    
-    return {"message": "Password has been reset successfully."}
+
+    # Password reset revokes every current session for this user.
+    tokens = get_tokens()
+    tokens = {
+        token: info for token, info in tokens.items()
+        if info.get("username") != request.username
+    }
+    save_tokens(tokens)
+    write_audit(
+        "PASSWORD_RESET_SUCCESS",
+        username=request.username,
+        company_id=user.get("company_id"),
+    )
+    return {"message": "Password reset successfully. Sign in with your new password."}

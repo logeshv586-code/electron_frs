@@ -3,14 +3,14 @@ import {
   ArrowLeft,
   Camera,
   CheckCircle2,
-  Clock3,
+  Clock,
   Eye,
   EyeOff,
-  KeyRound,
-  LockKeyhole,
+  Key,
+  Lock,
   ScanFace,
   ShieldCheck,
-  UserRound,
+  User,
   Users,
 } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
@@ -100,8 +100,8 @@ const AnimatedLoginPage = () => {
       setInlineError('Username and one-time token are required.');
       return;
     }
-    if (newPassword.length < 8) {
-      setInlineError('New password must be at least 8 characters.');
+    if (newPassword.length < 12) {
+      setInlineError('New password must be at least 12 characters.');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -176,7 +176,7 @@ const AnimatedLoginPage = () => {
                 <label className="auth-field">
                   <span>Username</span>
                   <div className="auth-input-wrap">
-                    <UserRound size={16} />
+                    <User size={16} />
                     <input
                       autoFocus
                       autoComplete="username"
@@ -191,7 +191,7 @@ const AnimatedLoginPage = () => {
                 <label className="auth-field">
                   <span>Password</span>
                   <div className="auth-input-wrap">
-                    <LockKeyhole size={16} />
+                    <Lock size={16} />
                     <input
                       type={showPassword ? 'text' : 'password'}
                       autoComplete="current-password"
@@ -220,11 +220,11 @@ const AnimatedLoginPage = () => {
                 <label className="auth-field">
                   <span>Username</span>
                   <div className="auth-input-wrap">
-                    <UserRound size={16} />
+                    <User size={16} />
                     <input autoFocus value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} placeholder="Enter username" />
                   </div>
                 </label>
-                <div className="reset-note"><Clock3 size={15} /><span>The token is valid for 15 minutes and can be used once.</span></div>
+                <div className="reset-note"><Clock size={15} /><span>The token is valid for 15 minutes and can be used once.</span></div>
                 <button className="auth-primary-button" type="submit" disabled={isLoading}>{isLoading ? 'Requesting token...' : 'Request one-time token'}</button>
               </form>
             )}
@@ -233,23 +233,23 @@ const AnimatedLoginPage = () => {
               <form className="product-login-form" onSubmit={handleResetPassword}>
                 <label className="auth-field">
                   <span>Username</span>
-                  <div className="auth-input-wrap"><UserRound size={16} /><input value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} /></div>
+                  <div className="auth-input-wrap"><User size={16} /><input value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} /></div>
                 </label>
                 <label className="auth-field">
                   <span>One-time token</span>
-                  <div className="auth-input-wrap"><KeyRound size={16} /><input autoFocus value={resetToken} onChange={(event) => setResetToken(event.target.value)} placeholder="Enter token" /></div>
+                  <div className="auth-input-wrap"><Key size={16} /><input autoFocus value={resetToken} onChange={(event) => setResetToken(event.target.value)} placeholder="Enter token" /></div>
                 </label>
                 <label className="auth-field">
                   <span>New password</span>
                   <div className="auth-input-wrap">
-                    <LockKeyhole size={16} />
-                    <input type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Minimum 8 characters" />
+                    <Lock size={16} />
+                    <input type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Minimum 12 characters" />
                     {renderPasswordButton(showNewPassword, () => setShowNewPassword((value) => !value), 'Toggle new password visibility')}
                   </div>
                 </label>
                 <label className="auth-field">
                   <span>Confirm password</span>
-                  <div className="auth-input-wrap"><LockKeyhole size={16} /><input type={showNewPassword ? 'text' : 'password'} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat new password" /></div>
+                  <div className="auth-input-wrap"><Lock size={16} /><input type={showNewPassword ? 'text' : 'password'} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat new password" /></div>
                 </label>
                 <button className="auth-primary-button" type="submit" disabled={isLoading}>{isLoading ? 'Updating password...' : 'Reset password'}</button>
               </form>

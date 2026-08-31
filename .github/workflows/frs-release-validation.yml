@@ -51,6 +51,9 @@ jobs:
       - name: Verify Python syntax
         run: python -m compileall -q backend_face scripts
 
+      - name: Run production guardrail tests
+        run: python -m unittest backend_face.tests.test_production_guardrails
+
       - name: Check source whitespace
         run: git diff --check
 
@@ -68,17 +71,23 @@ jobs:
           CI: 'false'
         run: npm run build
 
-      - name: Verify tenant and product guardrails
+      - name: Verify production integrations
         shell: bash
         run: |
           grep -q 'data-accent' frontend/src/components/layout/MainLayout.js
           grep -q 'Sapphire' frontend/src/components/layout/MainLayout.js
           grep -q 'REFERENCE_ONLY' frontend/src/components/camera/AddCameraForm.js
+          grep -q 'line_x1' frontend/src/components/camera/AddCameraForm.js
           grep -q 'AuthenticatedImage' frontend/src/components/FaceGallery.js
-          grep -q 'Only SuperAdmin can permanently delete users' backend_face/auth/user_routes.py
-          grep -q 'if method == "DELETE"' backend_face/auth/middleware.py
-          grep -q 'assigned_cameras' backend_face/camera_management/routes.py
-          grep -q 'tenant license' backend_face/auth/middleware.py
+          grep -q 'FRS_ARCFACE_MODEL_PATH' backend_face/recognition/arcface.py
+          grep -q 'vector_cosine_ops' backend_face/recognition/vector_store.py
+          grep -q 'FRS_LIVENESS_MODEL_PATH' backend_face/recognition/liveness.py
+          grep -q 'update_track_direction' backend_face/face_pipeline.py
+          grep -q 'FRS_EVIDENCE_STORAGE' backend_face/storage/evidence_store.py
+          grep -q 'REDIS_URL' backend_face/cache/redis_cache.py
+          grep -q 'FRS_ENABLE_PUBLIC_BIOMETRIC_STATIC' backend_face/main.py
+          grep -q 'FRS_ENABLE_LEGACY_MATCHING' backend_face/main.py
+          ! grep -q 'allow_origins=\["\*"\]' backend_face/main.py
           ! grep -q 'login-background-video' frontend/src/components/auth/AnimatedLoginPage.js
           ! grep -q 'Nexus Cyberpunk' frontend/src/components/layout/MainLayout.js
 

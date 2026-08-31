@@ -5,8 +5,6 @@ import {
   LayoutDashboard,
   Users,
   Camera,
-  Image,
-  Bell,
   ScanFace,
   Video,
   MonitorPlay,
@@ -33,6 +31,26 @@ const ACCENTS = [
   { id: 'indigo', label: 'Indigo', description: 'Enterprise', color: '#4f46e5' },
   { id: 'graphite', label: 'Graphite', description: 'Corporate neutral', color: '#475569' },
 ];
+
+const expandMenuIds = (source = []) => {
+  const result = new Set();
+  source.forEach((raw) => {
+    const menu = String(raw || '').trim().toLowerCase();
+    if (!menu) return;
+    if (menu === 'cameras') result.add('camera');
+    else if (menu === 'admin') result.add('users');
+    else if (menu === 'backupmgmt') result.add('backup');
+    else if (menu === 'attendance') {
+      result.add('attendance-report');
+      result.add('day-report');
+      result.add('week-report');
+      result.add('month-report');
+    } else {
+      result.add(menu);
+    }
+  });
+  return result;
+};
 
 const MainLayout = ({ children, activeTab, onTabChange }) => {
   const { user, token, logout, isLicenseExpired } = useAuthStore();
@@ -119,16 +137,10 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
     { id: 'backup', label: 'Backup', icon: Database },
   ], []);
 
-  const normalizedAssignedMenus = React.useMemo(() => {
-    const source = Array.isArray(user?.assigned_menus) ? user.assigned_menus : [];
-    return new Set(source.map((menu) => {
-      if (menu === 'cameras') return 'camera';
-      if (menu === 'admin') return 'users';
-      if (menu === 'backupmgmt') return 'backup';
-      if (menu === 'attendance') return 'attendance-report';
-      return menu;
-    }));
-  }, [user?.assigned_menus]);
+  const normalizedAssignedMenus = React.useMemo(
+    () => expandMenuIds(Array.isArray(user?.assigned_menus) ? user.assigned_menus : []),
+    [user?.assigned_menus],
+  );
 
   const role = String(user?.role || '').toLowerCase();
   const defaultAccess = React.useMemo(() => {
@@ -136,7 +148,10 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
       return new Set(['dashboard', 'companies', 'registration', 'matching', 'gallery', 'events', 'attendance-report', 'day-report', 'week-report', 'month-report', 'holiday-calendar', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup']);
     }
     if (role === 'admin') {
-      return new Set(['dashboard', 'registration', 'matching', 'gallery', 'events', 'attendance-report', 'day-report', 'week-report', 'month-report', 'holiday-calendar', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup']);
+      return new Set(['dashboard', 'registration', 'matching', 'gallery', 'events', 'attendance-report', 'day-report', 'week-report', 'month-report', 'camera', 'stream-viewer', 'video', 'users', 'settings', 'backup']);
+    }
+    if (role === 'supervisor') {
+      return new Set(['dashboard', 'events', 'attendance-report', 'day-report', 'week-report', 'month-report', 'camera', 'stream-viewer']);
     }
     return new Set(['dashboard']);
   }, [role]);
@@ -144,9 +159,7 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
   const hasExplicitMenus = normalizedAssignedMenus.size > 0;
   const canAccess = React.useCallback((tabId) => {
     if (role === 'superadmin') return true;
-    if (!hasExplicitMenus) return defaultAccess.has(tabId);
-    if (['admin'].includes(role) && ['attendance-report', 'day-report', 'week-report', 'month-report', 'backup'].includes(tabId)) return true;
-    return normalizedAssignedMenus.has(tabId);
+    return hasExplicitMenus ? normalizedAssignedMenus.has(tabId) : defaultAccess.has(tabId);
   }, [defaultAccess, hasExplicitMenus, normalizedAssignedMenus, role]);
 
   const visibleTabs = tabs
@@ -156,6 +169,14 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
       return { ...tab, subItems: tab.subItems.filter((item) => canAccess(item.id)) };
     })
     .filter((tab) => tab.subItems ? tab.subItems.length > 0 : canAccess(tab.id));
+
+  React.useEffect(() => {
+    const directlyVisible = visibleTabs.some((tab) => tab.id === activeTab || tab.subItems?.some((item) => item.id === activeTab));
+    if (!directlyVisible && visibleTabs.length > 0) {
+      const first = visibleTabs[0];
+      onTabChange(first.subItems?.[0]?.id || first.id);
+    }
+  }, [activeTab, onTabChange, visibleTabs]);
 
   const findLabel = () => {
     for (const tab of tabs) {
@@ -167,6 +188,7 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
   };
 
   const selectTab = (tabId) => {
+    if (!canAccess(tabId) && role !== 'superadmin') return;
     onTabChange(tabId);
     setMobileOpen(false);
   };
@@ -312,8 +334,8 @@ const MainLayout = ({ children, activeTab, onTabChange }) => {
           </div>
         </header>
 
-        {user?.role === 'Admin' && isLicenseExpired() && (
-          <div className="license-alert">Licence expired. Contact SuperAdmin to renew this company account.</div>
+        {user?.role !== 'SuperAdmin' && isLicenseExpired() && (
+          <div className="license-alert">Company licence expired. Contact your provider to renew access.</div>
         )}
 
         <div className="content-wrapper">

@@ -47,11 +47,22 @@ class SourceGuardrailTests(unittest.TestCase):
         self.assertNotIn("requests.get(", lowered)
         self.assertNotIn("requests.post(", lowered)
 
-    def test_pgvector_is_tenant_scoped(self):
+    def test_pgvector_is_tenant_scoped_and_active_only(self):
         source = self.read("backend_face/recognition/vector_store.py")
         self.assertIn("CREATE EXTENSION IF NOT EXISTS vector", source)
-        self.assertIn("WHERE company_id=%s", source)
+        self.assertIn("WHERE fv.company_id=%s", source)
+        self.assertIn("JOIN persons p", source)
+        self.assertIn("LOWER(COALESCE(p.status,'active'))='active'", source)
+        self.assertIn("delete_person_vectors", source)
         self.assertIn("vector_cosine_ops", source)
+
+    def test_person_delete_revokes_live_recognition(self):
+        registration = self.read("backend_face/registration/reg.py")
+        pipeline = self.read("backend_face/face_pipeline.py")
+        self.assertIn("delete_person_vectors", registration)
+        self.assertIn("invalidate_face_bank", registration)
+        self.assertIn("invalidate_person_tracking", registration)
+        self.assertIn("def invalidate_person_tracking", pipeline)
 
     def test_object_storage_tenant_check_exists(self):
         source = self.read("backend_face/storage/routes.py")

@@ -38,10 +38,11 @@ jobs:
 
       - name: Apply current recognition hardening
         run: |
-          # The foundational production finalizer has already been committed to this
-          # branch. Only current idempotent recognition/evidence hardeners run here.
+          # Foundational production source is already committed. Current hardeners are
+          # idempotent and are re-run to guarantee the release branch invariants.
           python scripts/harden_live_recognition.py
           python scripts/harden_gallery_evidence.py
+          python scripts/harden_person_lifecycle.py
 
       - name: Remove tracked runtime and biometric data
         shell: bash
@@ -90,6 +91,11 @@ jobs:
           grep -q 'AuthenticatedImage' frontend/src/components/PersonCard.js
           grep -q 'FRS_ARCFACE_MODEL_PATH' backend_face/recognition/arcface.py
           grep -q 'vector_cosine_ops' backend_face/recognition/vector_store.py
+          grep -q 'delete_person_vectors' backend_face/recognition/vector_store.py
+          grep -q "LOWER(COALESCE(p.status,'active'))='active'" backend_face/recognition/vector_store.py
+          grep -q 'invalidate_person_tracking' backend_face/face_pipeline.py
+          grep -q 'delete_person_vectors' backend_face/registration/reg.py
+          grep -q 'invalidate_face_bank' backend_face/registration/reg.py
           grep -q 'FRS_LIVENESS_MODEL_PATH' backend_face/recognition/liveness.py
           grep -q 'update_track_direction' backend_face/face_pipeline.py
           grep -q 'FRS_EVIDENCE_STORAGE' backend_face/storage/evidence_store.py

@@ -56,6 +56,11 @@ class CameraStreamManager:
         direction: str = "AUTO",
         site_id: Optional[str] = None,
         zone_id: Optional[str] = None,
+        line_x1: Optional[float] = None,
+        line_y1: Optional[float] = None,
+        line_x2: Optional[float] = None,
+        line_y2: Optional[float] = None,
+        in_side: str = "POSITIVE",
     ) -> str:
         existing = self.get_camera_stream(camera_id)
         if existing:
@@ -83,6 +88,11 @@ class CameraStreamManager:
                 "direction": (direction or "AUTO").upper(),
                 "site_id": site_id,
                 "zone_id": zone_id,
+                "line_x1": line_x1,
+                "line_y1": line_y1,
+                "line_x2": line_x2,
+                "line_y2": line_y2,
+                "in_side": (in_side or "POSITIVE").upper(),
                 "created_at": time.time(),
                 "is_active": True,
                 "frame_count": 0,

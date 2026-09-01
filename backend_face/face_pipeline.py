@@ -197,6 +197,30 @@ def load_company_embeddings(company_id: str) -> Dict[str, Any]:
         if cached and time.time() - cached["loaded_at"] < EMBEDDING_CACHE_SECONDS:
             return cached
     try:
+        from recognition.arcface import get_arcface_engine
+        from recognition.backfill import backfill_arcface_gallery
+        from recognition.vector_store import load_arcface_bank
+        arcface = get_arcface_engine()
+        if arcface.available:
+            arc_bank = load_arcface_bank(company_id)
+            if arc_bank.get("matrix") is None or arc_bank["matrix"].shape[0] == 0:
+                backfill_arcface_gallery(data_directory, company_id)
+                arc_bank = load_arcface_bank(company_id)
+            if arc_bank.get("matrix") is not None and arc_bank["matrix"].shape[0] > 0:
+                entry = {
+                    "matrix": arc_bank["matrix"],
+                    "names": list(arc_bank.get("names") or []),
+                    "person_indices": arc_bank.get("person_indices") or {},
+                    "loaded_at": time.time(),
+                    "model": "arcface-512",
+                }
+                with embedding_lock:
+                    company_embeddings[company_id] = entry
+                return entry
+    except Exception as exc:
+        logger.warning("ArcFace bank unavailable for %s; using dlib fallback: %s", company_id, exc)
+
+    try:
         from fr1 import load_known_faces
         encodings, names = load_known_faces(data_directory, company_id=company_id)
         matrix = np.asarray(encodings, dtype=np.float64)
@@ -389,6 +413,14 @@ def _match(embeddings: List[np.ndarray], bank: Dict[str, Any], company_id: str, 
     if not embeddings or matrix is None or len(names) == 0 or matrix.shape[0] == 0:
         return {"name": None, "distance": None, "confidence": 0.0, "embedding": embeddings[0] if embeddings else None, "margin": 0.0, "hits": 0}
 
+    if matrix.shape[1] == 512:
+        try:
+            from recognition.vector_store import match_arcface_embeddings
+            return match_arcface_embeddings(embeddings, company_id, min_side)
+        except Exception as exc:
+            logger.warning("ArcFace vector search failed for %s: %s", company_id, exc)
+            return {"name": None, "distance": None, "confidence": 0.0, "embedding": embeddings[0], "margin": 0.0, "hits": 0}
+
     threshold, required_margin, *_ = _thresholds(company_id, min_side)
     indices = bank.get("person_indices") or {}
     best_result = None
@@ -536,9 +568,11 @@ def process_frame(
         fw, fh = x2 - x1, y2 - y1
         if fw < DETECTION_MIN_FACE_PX or fh < DETECTION_MIN_FACE_PX:
             continue
+        kps = getattr(face, "kps", None)
         raw.append({
             "bbox": (x1, y1, x2, y2),
             "det_conf": float(getattr(face, "det_score", 0.0) or getattr(face, "score", 0.0) or 0.0),
+            "kps": np.asarray(kps, dtype=np.float32).reshape(-1, 2).tolist() if kps is not None else None,
         })
     raw = _dedupe_boxes(raw)
 
@@ -554,12 +588,49 @@ def process_frame(
         quality = _quality(face_crop, detection["det_conf"], min_side)
         threshold, margin_req, recognition_min, attendance_min, min_quality, attendance_quality, confirm_frames, window = _thresholds(company_id, min_side)
 
-        embeddings = _encode_variants(frame_bgr, bbox, min_side) if min_side >= recognition_min else []
+        embeddings = []
+        if min_side >= recognition_min:
+            try:
+                from recognition.arcface import get_arcface_engine
+                arcface = get_arcface_engine()
+                if arcface.available:
+                    arc_embedding = arcface.embed_frame(frame_bgr, bbox, detection.get("kps"))
+                    if arc_embedding is not None:
+                        embeddings = [arc_embedding.astype(np.float64)]
+            except Exception as exc:
+                logger.debug("ArcFace live embedding fallback: %s", exc)
+            if not embeddings:
+                embeddings = _encode_variants(frame_bgr, bbox, min_side)
         match = _match(embeddings, bank, company_id, min_side)
         track = detection["track"]
         with tracking_lock:
             _update_identity(track, match, quality, company_id, min_side)
             confirmed = track.get("confirmed_name")
+
+        try:
+            from recognition.liveness import get_liveness_engine
+            liveness = get_liveness_engine().evaluate(track, face_crop)
+        except Exception:
+            liveness = {"score": 0.0, "passed": True, "mode": "unavailable", "required": False}
+
+        stream_info = {}
+        if stream_id:
+            try:
+                from camera_management.streaming import get_stream_manager
+                stream_info = get_stream_manager().get_stream_info(stream_id) or {}
+            except Exception:
+                stream_info = {}
+        try:
+            from tracking.direction import has_virtual_line, update_track_direction
+            event_direction = update_track_direction(track, bbox, frame_bgr.shape, stream_info)
+            crossing_required = bool(
+                str(stream_info.get("camera_role") or "BIDIRECTIONAL").upper() == "BIDIRECTIONAL"
+                and str(stream_info.get("direction") or "AUTO").upper() == "AUTO"
+                and has_virtual_line(stream_info)
+            )
+        except Exception:
+            event_direction = str(stream_info.get("direction") or "AUTO").upper()
+            crossing_required = False
 
         current_match_is_confirmed = bool(confirmed and match.get("name") == confirmed)
         attendance_eligible = bool(
@@ -567,6 +638,9 @@ def process_frame(
             and min_side >= attendance_min
             and quality >= attendance_quality
             and detection["det_conf"] >= 0.55
+            and bool(liveness.get("passed", True))
+            and event_direction != "NONE"
+            and (not crossing_required or event_direction in {"IN", "OUT"})
         )
         results.append({
             "name": confirmed or "Unknown",
@@ -579,11 +653,16 @@ def process_frame(
             "bbox": bbox,
             "track_id": detection["track_id"],
             "track": track,
-            "embedding": match.get("embedding") or (embeddings[0] if embeddings else None),
+            "embedding": match.get("embedding") if match.get("embedding") is not None else (embeddings[0] if embeddings else None),
             "face_size_px": (fw, fh),
             "attendance_eligible": attendance_eligible,
             "current_match_is_confirmed": current_match_is_confirmed,
             "det_conf": detection["det_conf"],
+            "liveness_score": float(liveness.get("score") or 0.0),
+            "liveness_passed": bool(liveness.get("passed", True)),
+            "liveness_mode": liveness.get("mode"),
+            "event_direction": event_direction,
+            "model_version": match.get("model_version") or ("arcface-512" if embeddings and embeddings[0].shape[0] == 512 else "dlib-128-consensus-v2"),
         })
 
     # One physical identity may appear at most once in one frame. If two distinct
@@ -655,6 +734,8 @@ def process_frame(
                         camera_name=camera_name,
                         image_path=image_path,
                         attendance_eligible=item["attendance_eligible"],
+                        direction_override=item.get("event_direction"),
+                        model_version=item.get("model_version"),
                     )
                     track["last_event_at"] = now
                 except Exception as exc:
@@ -707,6 +788,8 @@ def process_frame(
                             image_path=str(saved) if saved else None,
                             attendance_eligible=False,
                             unknown_cluster_id=cluster_key,
+                            direction_override=item.get("event_direction"),
+                            model_version=item.get("model_version"),
                         )
                         track["last_unknown_at"] = now
                     except Exception as exc:
@@ -726,6 +809,11 @@ def process_frame(
             "is_verifying": item["name"] == "Unknown" and bool(item.get("candidate")),
             "attendance_eligible": item["attendance_eligible"],
             "identity_conflict": bool(item.get("identity_conflict")),
+            "liveness_score": item.get("liveness_score"),
+            "liveness_passed": item.get("liveness_passed"),
+            "liveness_mode": item.get("liveness_mode"),
+            "direction": item.get("event_direction"),
+            "model_version": item.get("model_version"),
         })
     return frame_bgr, public
 

@@ -212,6 +212,30 @@ def _write_person_templates(company_id: str, person_key: str, templates) -> Tupl
             continue
         db_templates.append((template_key, embedding, str(path), quality))
     replace_face_templates(company_id, person_key, db_templates)
+    try:
+        from recognition.arcface import get_arcface_engine
+        from recognition.vector_store import replace_person_vectors
+        arcface = get_arcface_engine()
+        if arcface.available:
+            arc_templates = []
+            for index, (template_key, image, _dlib_embedding, quality) in enumerate(templates):
+                vector = arcface.embed_crop(image)
+                source = person_dir / f"template_{index:02d}_{template_key}.jpg"
+                if vector is not None and source.exists():
+                    arc_templates.append((template_key, vector, str(source), quality))
+            replace_person_vectors(company_id, person_key, arc_templates, arcface.model_version)
+        try:
+            from face_pipeline import clear_company_embeddings_cache
+            clear_company_embeddings_cache(company_id)
+        except Exception:
+            pass
+        try:
+            from cache.redis_cache import get_event_cache
+            get_event_cache().invalidate_face_bank(company_id)
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.warning("ArcFace enrollment vectors were not updated: %s", exc)
     return person_dir, len(db_templates)
 
 

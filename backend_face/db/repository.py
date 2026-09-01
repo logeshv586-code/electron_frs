@@ -385,6 +385,11 @@ def get_camera_context(camera_name: Optional[str], company_id: Optional[str], ca
         "direction": "AUTO",
         "site_id": None,
         "zone_id": None,
+        "line_x1": None,
+        "line_y1": None,
+        "line_x2": None,
+        "line_y2": None,
+        "in_side": "POSITIVE",
     }
 
 
@@ -409,6 +414,11 @@ def save_camera(data: Dict[str, Any]) -> Dict[str, Any]:
         "zone_id": data.get("zone_id"),
         "camera_role": (data.get("camera_role") or "BIDIRECTIONAL").upper(),
         "direction": (data.get("direction") or "AUTO").upper(),
+        "line_x1": data.get("line_x1"),
+        "line_y1": data.get("line_y1"),
+        "line_x2": data.get("line_x2"),
+        "line_y2": data.get("line_y2"),
+        "in_side": (data.get("in_side") or "POSITIVE").upper(),
         "status": data.get("status") or "inactive",
         "created_at": data.get("created_at") or iso_utc(),
         "last_seen": data.get("last_seen"),
@@ -421,13 +431,14 @@ def save_camera(data: Dict[str, Any]) -> Dict[str, Any]:
                 conn,
                 """
                 UPDATE cameras SET company_id=?,name=?,rtsp_url=?,collection_id=?,collection_name=?,ip_address=?,
-                    location=?,site_id=?,zone_id=?,camera_role=?,direction=?,status=?,last_seen=?,error_count=?,is_active=?
+                    location=?,site_id=?,zone_id=?,camera_role=?,direction=?,line_x1=?,line_y1=?,line_x2=?,line_y2=?,in_side=?,status=?,last_seen=?,error_count=?,is_active=?
                 WHERE id=?
                 """,
                 (
                     fields["company_id"], fields["name"], fields["rtsp_url"], fields["collection_id"], fields["collection_name"],
                     fields["ip_address"], fields["location"], fields["site_id"], fields["zone_id"], fields["camera_role"],
-                    fields["direction"], fields["status"], fields["last_seen"], fields["error_count"], fields["is_active"], camera_id,
+                    fields["direction"], fields["line_x1"], fields["line_y1"], fields["line_x2"], fields["line_y2"], fields["in_side"],
+                    fields["status"], fields["last_seen"], fields["error_count"], fields["is_active"], camera_id,
                 ),
             )
         else:
@@ -435,12 +446,13 @@ def save_camera(data: Dict[str, Any]) -> Dict[str, Any]:
                 conn,
                 """
                 INSERT INTO cameras(id,company_id,name,rtsp_url,collection_id,collection_name,ip_address,location,site_id,zone_id,
-                    camera_role,direction,status,created_at,last_seen,error_count,is_active)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    camera_role,direction,line_x1,line_y1,line_x2,line_y2,in_side,status,created_at,last_seen,error_count,is_active)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 tuple(fields[k] for k in (
                     "id", "company_id", "name", "rtsp_url", "collection_id", "collection_name", "ip_address", "location",
-                    "site_id", "zone_id", "camera_role", "direction", "status", "created_at", "last_seen", "error_count", "is_active",
+                    "site_id", "zone_id", "camera_role", "direction", "line_x1", "line_y1", "line_x2", "line_y2", "in_side",
+                    "status", "created_at", "last_seen", "error_count", "is_active",
                 )),
             )
     return get_camera(camera_id) or fields

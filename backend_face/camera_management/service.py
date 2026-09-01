@@ -207,6 +207,11 @@ class EnhancedCameraService:
             zone_id=request.zone_id,
             camera_role=request.camera_role,
             direction=request.direction,
+            line_x1=request.line_x1,
+            line_y1=request.line_y1,
+            line_x2=request.line_x2,
+            line_y2=request.line_y2,
+            in_side=request.in_side,
             status="inactive",
             created_at=now,
             error_count=0,
@@ -279,6 +284,11 @@ class EnhancedCameraService:
                     direction=camera.direction,
                     site_id=camera.site_id,
                     zone_id=camera.zone_id,
+                    line_x1=camera.line_x1,
+                    line_y1=camera.line_y1,
+                    line_x2=camera.line_x2,
+                    line_y2=camera.line_y2,
+                    in_side=camera.in_side,
                 )
         except Exception as exc:
             logger.warning("Camera activated but stream did not start: %s", exc)

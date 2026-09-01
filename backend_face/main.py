@@ -75,7 +75,17 @@ async def start_persistent_streams():
                             camera_id=camera.id,
                             rtsp_url=camera.rtsp_url,
                             camera_name=camera.name,
-                            company_id=camera.company_id
+                            company_id=camera.company_id,
+                            location=camera.location,
+                            camera_role=camera.camera_role,
+                            direction=camera.direction,
+                            site_id=camera.site_id,
+                            zone_id=camera.zone_id,
+                            line_x1=camera.line_x1,
+                            line_y1=camera.line_y1,
+                            line_x2=camera.line_x2,
+                            line_y2=camera.line_y2,
+                            in_side=camera.in_side,
                         )
                         logger.info(f"✓ Persistent stream started: {camera.name} ({stream_id})")
                         active_count += 1
@@ -92,6 +102,12 @@ async def start_persistent_streams():
 
 @app.on_event("startup")
 async def startup_event():
+    try:
+        from auth.bootstrap import bootstrap_admin_from_env
+        bootstrap_admin_from_env()
+    except Exception as exc:
+        logger.error(f"Admin bootstrap check failed: {exc}")
+
     start_license_checker()
     logger.info("License checker background task started")
     
@@ -122,12 +138,15 @@ async def startup_event():
 app.add_middleware(RBACMiddleware)
 
 # Configure CORS to allow frontend requests
+allowed_origins = [value.strip() for value in os.getenv(
+    "FRS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8005,http://127.0.0.1:8005"
+).split(",") if value.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # ============= WEBSOCKET ENDPOINT =============
@@ -138,7 +157,8 @@ async def websocket_endpoint(websocket: WebSocket, company_id: str):
     WebSocket endpoint for real-time recognition events.
     Filtered by company_id for multi-tenancy.
     """
-    await ws_manager.connect(websocket, company_id)
+    if not await ws_manager.connect(websocket, company_id):
+        return
     try:
         while True:
             # Keep connection alive and wait for client to disconnect
@@ -171,6 +191,9 @@ def mount_services():
         from event.event_api import router as event_router
         app.include_router(event_router, prefix="/api/events", tags=["Events"])
         logger.info("✓ Event service mounted")
+        from storage.routes import router as storage_router
+        app.include_router(storage_router, prefix="/api/storage", tags=["Evidence Storage"])
+        logger.info("✓ Authenticated evidence storage service mounted")
     except Exception as e:
         logger.error(f"✗ Failed to mount event service: {e}")
 
@@ -219,13 +242,15 @@ def mount_services():
         logger.error(f"✗ Failed to mount backup service: {e}")
         logger.info("Backup management will be unavailable")
 
-    # Mount matching service
-    try:
-        from matching.one import app as matching_app
-        app.mount("/api/matching", matching_app)
-        logger.info("? Matching service mounted")
-    except Exception as e:
-        logger.error(f"✗ Failed to mount matching service: {e}")
+    # Legacy matching service is disabled by default because the database-backed
+    # /api/events/match-face endpoint enforces tenant isolation without mutable global galleries.
+    if os.getenv("FRS_ENABLE_LEGACY_MATCHING", "0").lower() in {"1", "true", "yes"}:
+        try:
+            from matching.one import app as matching_app
+            app.mount("/api/matching", matching_app)
+            logger.warning("Legacy matching service enabled explicitly")
+        except Exception as e:
+            logger.error(f"✗ Failed to mount legacy matching service: {e}")
 
     # Mount video processing service
     try:
@@ -303,9 +328,11 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8005")
 os.makedirs(GALLERY_DIR, exist_ok=True)
 os.makedirs(CAPTURED_FACES_DIR, exist_ok=True)
 
-# Mount static files for gallery images and captured faces
-app.mount("/static/gallery", StaticFiles(directory=GALLERY_DIR), name="gallery")
-app.mount("/static/captured", StaticFiles(directory=CAPTURED_FACES_DIR), name="captured")
+# Public biometric static mounts are disabled by default. Authenticated API routes
+# serve gallery/capture evidence; a development-only override is available when required.
+if os.getenv("FRS_ENABLE_PUBLIC_BIOMETRIC_STATIC", "0").lower() in {"1", "true", "yes"}:
+    app.mount("/static/gallery", StaticFiles(directory=GALLERY_DIR), name="gallery")
+    app.mount("/static/captured", StaticFiles(directory=CAPTURED_FACES_DIR), name="captured")
 
 # Add endpoint to serve gallery images with error handling
 from fastapi import HTTPException

@@ -65,17 +65,30 @@ const UserManagement = () => {
 
   const availableMenus = [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'registration', label: 'Registration' },
-    { id: 'gallery', label: 'Gallery' },
-    { id: 'events', label: 'Events' },
-    { id: 'video', label: 'Video Processing' },
+    { id: 'registration', label: 'Employees' },
+    { id: 'matching', label: 'Face Matching' },
+    { id: 'gallery', label: 'Face Gallery' },
+    { id: 'events', label: 'Recognition Events' },
+    { id: 'attendance', label: 'Attendance & Reports' },
+    { id: 'holiday-calendar', label: 'Holiday Calendar' },
     { id: 'camera', label: 'Camera Management' },
-    { id: 'stream-viewer', label: 'Stream Viewer' },
+    { id: 'stream-viewer', label: 'Live View' },
+    { id: 'video', label: 'Video Processing' },
     { id: 'users', label: 'User Management' },
     { id: 'settings', label: 'Settings' },
+    { id: 'backup', label: 'Backup' },
   ];
 
   const { user: currentUser, token } = useAuthStore();
+  const supervisorCapableMenus = new Set(['dashboard', 'registration', 'events', 'attendance', 'camera', 'stream-viewer']);
+  const normalizedCurrentMenus = new Set((currentUser?.assigned_menus || []).map((menu) => {
+    if (menu === 'cameras') return 'camera';
+    if (menu === 'attendance-report' || menu === 'day-report' || menu === 'week-report' || menu === 'month-report') return 'attendance';
+    return menu;
+  }));
+  const assignableMenus = currentUser?.role === 'SuperAdmin'
+    ? availableMenus
+    : availableMenus.filter((menu) => supervisorCapableMenus.has(menu.id) && (normalizedCurrentMenus.size === 0 || normalizedCurrentMenus.has(menu.id)));
 
   useEffect(() => {
     fetchUsers();
@@ -375,9 +388,11 @@ const UserManagement = () => {
                         <button className="action-btn edit" onClick={() => openEditModal(user)} title="Edit">
                           <Edit2 size={16} />
                         </button>
-                        <button className="action-btn delete" onClick={() => handleDelete(user.username)} title="Delete">
-                          <Trash2 size={16} />
-                        </button>
+                        {currentUser.role === 'SuperAdmin' && (
+                          <button className="action-btn delete" onClick={() => handleDelete(user.username)} title="Delete permanently">
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
@@ -434,7 +449,8 @@ const UserManagement = () => {
                           value={formData.password}
                           onChange={handleInputChange}
                           required={!isEditing}
-                          placeholder={isEditing ? "Leave blank to keep current" : "Enter password"}
+                          minLength={12}
+                          placeholder={isEditing ? "Leave blank to keep current" : "Minimum 12 characters"}
                         />
                       </div>
                     </div>
@@ -590,7 +606,7 @@ const UserManagement = () => {
                   <div className="form-section">
                     <h4 className="section-title">ASSIGNED PERMISSIONS</h4>
                     <div className="permissions-grid">
-                      {availableMenus.map(menu => {
+                      {assignableMenus.map(menu => {
                         const isSelected = (formData.assigned_menus || []).includes(menu.id);
                         return (
                           <label key={menu.id} className={`permission-card ${isSelected ? 'selected' : ''}`}>

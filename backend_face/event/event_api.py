@@ -63,6 +63,12 @@ def _validate_date(value: Optional[str], default_today: bool = False) -> Optiona
 def _image_url(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
+    if str(path).startswith("s3://"):
+        try:
+            from storage.evidence_store import get_evidence_store
+            return get_evidence_store().api_url(str(path))
+        except Exception:
+            return None
     try:
         absolute = Path(path)
         if not absolute.is_absolute():
@@ -103,9 +109,13 @@ def _event_view(event: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _filter_assigned_cameras(request: Request, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    assigned = _user(request).get("assigned_cameras") or []
-    if not assigned or _user(request).get("role") == "SuperAdmin":
+    user = _user(request)
+    role = user.get("role")
+    if role in {"SuperAdmin", "Admin"}:
         return events
+    assigned = user.get("assigned_cameras") or []
+    if not assigned:
+        return []
     allowed = {str(value).lower() for value in assigned}
     return [
         event for event in events
@@ -159,10 +169,14 @@ async def filter_faces(
 @router.get("/cameras")
 async def event_cameras(request: Request):
     tenant = _tenant(request, allow_all_superadmin=True)
+    user = _user(request)
     if tenant is None:
-        rows = fetch_all("SELECT DISTINCT name FROM cameras WHERE name IS NOT NULL ORDER BY name")
+        rows = fetch_all("SELECT DISTINCT id,name FROM cameras WHERE name IS NOT NULL ORDER BY name")
     else:
-        rows = fetch_all("SELECT DISTINCT name FROM cameras WHERE company_id=? AND name IS NOT NULL ORDER BY name", (tenant,))
+        rows = fetch_all("SELECT DISTINCT id,name FROM cameras WHERE company_id=? AND name IS NOT NULL ORDER BY name", (tenant,))
+    if user.get("role") == "Supervisor":
+        assigned = {str(value).lower() for value in user.get("assigned_cameras") or []}
+        rows = [row for row in rows if str(row.get("id") or "").lower() in assigned or str(row.get("name") or "").lower() in assigned]
     return {"cameras": [row["name"] for row in rows]}
 
 

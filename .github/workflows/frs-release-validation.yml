@@ -36,8 +36,13 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Apply deterministic source fixes
-        run: python scripts/finalize_frs_source.py
+      - name: Apply current recognition hardening
+        run: |
+          # Foundational production source is already committed. Current hardeners are
+          # idempotent and are re-run to guarantee the release branch invariants.
+          python scripts/harden_live_recognition.py
+          python scripts/harden_gallery_evidence.py
+          python scripts/harden_person_lifecycle.py
 
       - name: Remove tracked runtime and biometric data
         shell: bash
@@ -51,8 +56,13 @@ jobs:
       - name: Verify Python syntax
         run: python -m compileall -q backend_face scripts
 
+      - name: Install recognition test dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir numpy==1.26.4
+
       - name: Run production guardrail tests
-        run: python -m unittest backend_face.tests.test_production_guardrails
+        run: |
+          python -m unittest backend_face.tests.test_production_guardrails
+          python -m unittest backend_face.tests.test_recognition_integrity
 
       - name: Check source whitespace
         run: git diff --check
@@ -81,10 +91,24 @@ jobs:
           grep -q 'AuthenticatedImage' frontend/src/components/PersonCard.js
           grep -q 'FRS_ARCFACE_MODEL_PATH' backend_face/recognition/arcface.py
           grep -q 'vector_cosine_ops' backend_face/recognition/vector_store.py
+          grep -q 'delete_person_vectors' backend_face/recognition/vector_store.py
+          grep -q "LOWER(COALESCE(p.status,'active'))='active'" backend_face/recognition/vector_store.py
+          grep -q 'invalidate_person_tracking' backend_face/face_pipeline.py
+          grep -q 'delete_person_vectors' backend_face/registration/reg.py
+          grep -q 'invalidate_face_bank' backend_face/registration/reg.py
           grep -q 'FRS_LIVENESS_MODEL_PATH' backend_face/recognition/liveness.py
           grep -q 'update_track_direction' backend_face/face_pipeline.py
           grep -q 'FRS_EVIDENCE_STORAGE' backend_face/storage/evidence_store.py
           grep -q 'REDIS_URL' backend_face/cache/redis_cache.py
+          grep -q 'dedupe_face_detections' backend_face/face_pipeline.py
+          grep -q 'update_track_identity' backend_face/face_pipeline.py
+          grep -q 'suppress_overlapping_results' backend_face/face_pipeline.py
+          grep -q 'evidence_score' backend_face/camera_management/streaming.py
+          grep -q 'DETECTION_MIN_CONFIDENCE' backend_face/face_pipeline.py
+          grep -q 'KNOWN_IMAGE_INTERVAL_SECONDS' backend_face/face_pipeline.py
+          grep -q 'identity_key=item\["name"\]' backend_face/face_pipeline.py
+          grep -q 'identity_key=cluster_key' backend_face/face_pipeline.py
+          grep -q '_camera_name_for_stream' backend_face/face_pipeline.py
           grep -q 'FRS_ENABLE_PUBLIC_BIOMETRIC_STATIC' backend_face/main.py
           grep -q 'FRS_ENABLE_LEGACY_MATCHING' backend_face/main.py
           ! grep -q 'allow_origins=\["\*"\]' backend_face/main.py

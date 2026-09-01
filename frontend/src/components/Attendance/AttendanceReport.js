@@ -1,419 +1,224 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Search, Filter, Calendar, FileText, FileSpreadsheet, Users, UserX, AlertTriangle, Clock, ArrowLeft } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, ArrowLeft, Calendar, Clock, FileSpreadsheet, FileText, Filter, Search, Users, UserX } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
-import { API_BASE_URL, getApiUrl, fixImageUrl } from '../../utils/apiConfig';
+import AuthenticatedImage from '../common/AuthenticatedImage';
+import { API_BASE_URL } from '../../utils/apiConfig';
 import './AttendanceReport.css';
 
+const localDate = () => {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+};
+
 const AttendanceReport = ({ reportType, setActiveTab }) => {
-    const { user: currentUser, token } = useAuthStore();
-    const [reportData, setReportData] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
+  const token = useAuthStore((state) => state.token);
+  const [reportData, setReportData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [targetDate, setTargetDate] = useState(localDate());
+  const [startDate, setStartDate] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 7);
+    return date.toISOString().slice(0, 10);
+  });
+  const [endDate, setEndDate] = useState(localDate());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
 
-    const [targetDate, setTargetDate] = useState(new Date().toISOString().split('T')[0]);
+  const isAggregate = reportType === 'week-report' || reportType === 'month-report';
 
-    // For aggregate reports
-    const [startDate, setStartDate] = useState(() => {
-        const d = new Date();
-        d.setDate(d.getDate() - 7);
-        return d.toISOString().split('T')[0];
-    });
-    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  useEffect(() => {
+    const initialFilter = localStorage.getItem('attendanceFilter');
+    if (initialFilter) {
+      setStatusFilter(initialFilter);
+      localStorage.removeItem('attendanceFilter');
+    }
+  }, [reportType]);
 
-    const [searchTerm, setSearchTerm] = useState('');
-    const [statusFilter, setStatusFilter] = useState('All');
+  useEffect(() => {
+    if (reportType === 'week-report') {
+      const date = new Date();
+      date.setDate(date.getDate() - 7);
+      setStartDate(date.toISOString().slice(0, 10));
+      setEndDate(localDate());
+    }
+    if (reportType === 'month-report') {
+      const date = new Date();
+      date.setDate(1);
+      setStartDate(date.toISOString().slice(0, 10));
+      setEndDate(localDate());
+    }
+  }, [reportType]);
 
-    const isAggregate = reportType === 'week-report' || reportType === 'month-report';
-
-    useEffect(() => {
-        const initialFilter = localStorage.getItem('attendanceFilter');
-        if (initialFilter) {
-            setStatusFilter(initialFilter);
-            localStorage.removeItem('attendanceFilter');
-        }
-    }, [reportType]);
-
-    useEffect(() => {
-        if (reportType === 'week-report') {
-            const d = new Date();
-            d.setDate(d.getDate() - 7);
-            setStartDate(d.toISOString().split('T')[0]);
-            setEndDate(new Date().toISOString().split('T')[0]);
-        } else if (reportType === 'month-report') {
-            const d = new Date();
-            d.setDate(1);
-            setStartDate(d.toISOString().split('T')[0]);
-            setEndDate(new Date().toISOString().split('T')[0]);
-        }
-    }, [reportType]);
-
-    useEffect(() => {
-        fetchAttendanceData();
-    }, [targetDate, startDate, endDate, reportType]);
-
+  useEffect(() => {
+    let cancelled = false;
     const fetchAttendanceData = async () => {
-        try {
-            setLoading(true);
-            setError(null);
-
-            const url = isAggregate
-                ? `${API_BASE_URL}/api/events/attendance/aggregate?start_date=${startDate}&end_date=${endDate}`
-                : `${API_BASE_URL}/api/events/attendance?target_date=${targetDate}`;
-
-            const response = await fetch(url, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-
-            if (!response.ok) {
-                throw new Error(`Failed to fetch attendance data: ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            setReportData(data.attendance || data.aggregate || []);
-        } catch (err) {
-            console.error("Error fetching attendance:", err);
-            setError(err.message);
-        } finally {
-            setLoading(false);
-        }
+      setLoading(true);
+      setError('');
+      const endpoint = isAggregate
+        ? `${API_BASE_URL}/api/events/attendance/aggregate?start_date=${startDate}&end_date=${endDate}`
+        : `${API_BASE_URL}/api/events/attendance?target_date=${targetDate}`;
+      try {
+        const response = await fetch(endpoint, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || 'Could not load attendance data.');
+        if (!cancelled) setReportData(payload.attendance || payload.aggregate || []);
+      } catch (requestError) {
+        if (!cancelled) setError(requestError.message || 'Could not load attendance data.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     };
+    fetchAttendanceData();
+    return () => { cancelled = true; };
+  }, [targetDate, startDate, endDate, reportType, isAggregate, token]);
 
-    const getDayTitle = () => {
-        switch (reportType) {
-            case 'day-report': return 'Daily Attendance Report';
-            case 'week-report': return 'Weekly Attendance Report';
-            case 'month-report': return 'Monthly Attendance Report';
-            default: return 'Attendance Report';
-        }
-    };
+  const title = useMemo(() => {
+    if (reportType === 'day-report') return 'Daily Attendance';
+    if (reportType === 'week-report') return 'Weekly Attendance';
+    if (reportType === 'month-report') return 'Monthly Attendance';
+    return 'Attendance Report';
+  }, [reportType]);
 
-    const filteredData = reportData.filter(record => {
-        const matchesSearch = record.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (record.emp_id && record.emp_id.toLowerCase().includes(searchTerm.toLowerCase()));
+  const filteredData = useMemo(() => reportData.filter((record) => {
+    const query = searchTerm.trim().toLowerCase();
+    const matchesSearch = !query
+      || String(record.name || '').toLowerCase().includes(query)
+      || String(record.emp_id || '').toLowerCase().includes(query)
+      || String(record.department || '').toLowerCase().includes(query);
+    if (!matchesSearch || statusFilter === 'All') return matchesSearch;
+    if (isAggregate) {
+      if (statusFilter === 'Present') return Number(record.total_present || 0) > 0;
+      if (statusFilter === 'Absent') return Number(record.total_present || 0) === 0;
+      if (statusFilter === 'Late') return Number(record.total_late || 0) > 0;
+      return true;
+    }
+    if (statusFilter === 'Present') return record.status === 'Present' && !record.is_late;
+    if (statusFilter === 'Absent') return record.status === 'Absent';
+    if (statusFilter === 'Late') return !!record.is_late || record.status === 'Late';
+    return true;
+  }), [reportData, searchTerm, statusFilter, isAggregate]);
 
-        let matchesStatus = true;
-        if (!isAggregate) {
-            if (statusFilter === 'Present') matchesStatus = record.status === 'Present' && !record.is_late;
-            else if (statusFilter === 'Absent') matchesStatus = record.status === 'Absent';
-            else if (statusFilter === 'Late') matchesStatus = record.is_late;
-        } else {
-            if (statusFilter === 'Present') matchesStatus = (record.total_present || 0) > 0;
-            else if (statusFilter === 'Absent') matchesStatus = (record.total_present || 0) === 0;
-            else if (statusFilter === 'Late') matchesStatus = (record.total_late || 0) > 0;
-        }
+  const metrics = useMemo(() => ({
+    present: isAggregate ? reportData.reduce((sum, record) => sum + Number(record.total_present || 0), 0) : reportData.filter((record) => ['Present', 'Late'].includes(record.status)).length,
+    absent: isAggregate ? reportData.reduce((sum, record) => sum + Number(record.total_absent || 0), 0) : reportData.filter((record) => record.status === 'Absent').length,
+    late: isAggregate ? reportData.reduce((sum, record) => sum + Number(record.total_late || 0), 0) : reportData.filter((record) => record.is_late || record.status === 'Late').length,
+    total: reportData.length,
+  }), [reportData, isAggregate]);
 
-        return matchesSearch && matchesStatus;
+  const exportToCSV = () => {
+    if (!filteredData.length) return;
+    const headers = isAggregate
+      ? ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Email', 'Total Present', 'Total Absent', 'Total Late', 'Total Hrs', 'Avg Hrs/Day']
+      : ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Email', 'Status', 'Punch In', 'Punch Out', 'Working Hours', 'Late'];
+    const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const rows = filteredData.map((row, index) => {
+      const common = [row.s_no || index + 1, row.emp_id, row.name, row.department, row.designation, row.email];
+      const tail = isAggregate
+        ? [row.total_present, row.total_absent, row.total_late, row.total_working_hours, row.avg_working_hours]
+        : [row.status, row.punch_in, row.punch_out, row.working_hours, row.is_late ? 'Yes' : 'No'];
+      return [...common, ...tail].map(escape).join(',');
     });
+    const blob = new Blob([[headers.join(','), ...rows].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${title.replace(/\s+/g, '_')}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
-    // Summary calculations
-    const totalPresent = isAggregate ? reportData.reduce((acc, r) => acc + (r.total_present || 0), 0) : reportData.filter(r => r.status === 'Present').length;
-    const totalAbsent = isAggregate ? reportData.reduce((acc, r) => acc + (r.total_absent || 0), 0) : reportData.filter(r => r.status === 'Absent').length;
-    const totalLate = isAggregate ? reportData.reduce((acc, r) => acc + (r.total_late || 0), 0) : reportData.filter(r => r.is_late).length;
+  const exportToPDF = async () => {
+    setError('');
+    const endpoint = isAggregate
+      ? `${API_BASE_URL}/api/events/export/attendance-aggregate-pdf?start_date=${startDate}&end_date=${endDate}`
+      : `${API_BASE_URL}/api/events/export/attendance-pdf?target_date=${targetDate}`;
+    try {
+      const response = await fetch(endpoint, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || 'Could not generate the PDF report.');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = isAggregate ? `attendance_${startDate}_to_${endDate}.pdf` : `attendance_${targetDate}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(exportError.message || 'Could not export the PDF.');
+    }
+  };
 
-    const exportToCSV = () => {
-        if (filteredData.length === 0) return;
-
-        const headers = isAggregate
-            ? ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Email', 'Total Present', 'Total Absent', 'Total Late', 'Total Hrs', 'Avg Hrs/Day']
-            : ['S.No', 'EMP ID', 'Name', 'Department', 'Designation', 'Email', 'Status', 'Punch In', 'Punch Out', 'Working Hours', 'Late'];
-
-        const csvRows = [headers.join(',')];
-
-        filteredData.forEach(row => {
-            const values = [
-                row.s_no || '',
-                row.emp_id || '',
-                `"${row.name || ''}"`,
-                `"${row.department || ''}"`,
-                `"${row.designation || ''}"`,
-                `"${row.email || ''}"`
-            ];
-
-            if (isAggregate) {
-                values.push(row.total_present || 0);
-                values.push(row.total_absent || 0);
-                values.push(row.total_late || 0);
-                values.push(row.total_working_hours || '-');
-                values.push(row.avg_working_hours || '-');
-            } else {
-                values.push(row.status || '');
-                values.push(row.punch_in || '');
-                values.push(row.punch_out || '');
-                values.push(row.working_hours || '-');
-                values.push(row.is_late ? 'Yes' : 'No');
-            }
-
-            csvRows.push(values.join(','));
-        });
-
-        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.setAttribute('hidden', '');
-        a.setAttribute('href', url);
-        a.setAttribute('download', `${getDayTitle().replace(/\s+/g, '_')}.csv`);
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    };
-
-    const exportToPDF = async () => {
-        try {
-            setLoading(true);
-            // Construct the appropriate URL based on report type
-            const endpoint = isAggregate
-                ? `${API_BASE_URL}/api/events/export/attendance-aggregate-pdf?start_date=${startDate}&end_date=${endDate}`
-                : `${API_BASE_URL}/api/events/export/attendance-pdf?target_date=${targetDate}`;
-
-            const response = await fetch(endpoint, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                throw new Error(errData.detail || 'Failed to generate PDF');
-            }
-
-            const blob = await response.blob();
-            const downloadUrl = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = downloadUrl;
-
-            const filename = isAggregate
-                ? `attendance_aggregate_report_${startDate}_to_${endDate}.pdf`
-                : `attendance_report_${targetDate}.pdf`;
-
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-
-            // Cleanup
-            setTimeout(() => {
-                window.URL.revokeObjectURL(downloadUrl);
-                document.body.removeChild(a);
-            }, 100);
-        } catch (err) {
-            console.error("Error exporting PDF:", err);
-            setError(`Failed to export PDF: ${err.message}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="attendance-report-container animate-fade-in">
-            <div className="report-header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    {setActiveTab && (
-                        <button
-                            onClick={() => setActiveTab('dashboard')}
-                            className="btn-back-clean"
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-secondary)' }}
-                        >
-                            <ArrowLeft size={20} /> Back
-                        </button>
-                    )}
-                    <div>
-                        <h2 style={{ margin: 0 }}>{getDayTitle()}</h2>
-                        <p className="subtitle" style={{ margin: '4px 0 0' }}>View and manage employee attendance logs</p>
-                    </div>
-                </div>
-                <div className="report-actions">
-                    <div className="search-bar">
-                        <Search size={18} />
-                        <input
-                            type="text"
-                            placeholder="Search by Employee ID or Name"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-
-                    <div className="status-filter" style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-input)', padding: '0 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                        <Filter size={18} style={{ color: 'var(--text-secondary)', marginRight: '8px' }} />
-                        <select
-                            value={statusFilter}
-                            onChange={(e) => setStatusFilter(e.target.value)}
-                            style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '8px 0', outline: 'none', cursor: 'pointer' }}
-                        >
-                            <option value="All">All Statuses</option>
-                            <option value="Present">Present</option>
-                            <option value="Absent">Absent</option>
-                            <option value="Late">Late</option>
-                        </select>
-                    </div>
-
-                    {isAggregate ? (
-                        <div className="date-picker-wrap" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <Calendar size={18} />
-                            <input
-                                type="date"
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="date-input"
-                            />
-                            <span style={{ color: 'var(--text-secondary)' }}>to</span>
-                            <input
-                                type="date"
-                                value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                                className="date-input"
-                            />
-                        </div>
-                    ) : (
-                        <div className="date-picker-wrap">
-                            <Calendar size={18} />
-                            <input
-                                type="date"
-                                value={targetDate}
-                                onChange={(e) => setTargetDate(e.target.value)}
-                                className="date-input"
-                            />
-                        </div>
-                    )}
-
-                    <div className="export-buttons" style={{ display: 'flex', gap: '8px' }}>
-                        <button className="btn-export" onClick={exportToCSV} title="Export as Excel/CSV">
-                            <FileSpreadsheet size={18} /> CSV
-                        </button>
-                        <button className="btn-export pdf-btn" onClick={exportToPDF} title="Export as PDF">
-                            <FileText size={18} /> PDF
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* Summary Bar */}
-            <div className="summary-bar" style={{ display: 'flex', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
-                <div className="summary-card" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', background: 'rgba(16,185,129,0.1)', borderRadius: '8px', color: '#10b981' }}>
-                    <Users size={18} /> <strong>{totalPresent}</strong> Present
-                </div>
-                <div className="summary-card" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', color: '#ef4444' }}>
-                    <UserX size={18} /> <strong>{totalAbsent}</strong> Absent
-                </div>
-                <div className="summary-card" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', background: 'rgba(249,115,22,0.1)', borderRadius: '8px', color: '#f97316' }}>
-                    <AlertTriangle size={18} /> <strong>{totalLate}</strong> Late
-                </div>
-                <div className="summary-card" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', background: 'rgba(59,130,246,0.1)', borderRadius: '8px', color: '#3b82f6' }}>
-                    <Clock size={18} /> <strong>{isAggregate ? filteredData.length : reportData.length}</strong> Total
-                </div>
-            </div>
-
-            {error && (
-                <div className="error-message">
-                    {error}
-                </div>
-            )}
-
-            <div className="table-container">
-                {loading ? (
-                    <div className="loading-state">
-                        <div className="spinner"></div>
-                        <p>Loading attendance records...</p>
-                    </div>
-                ) : (
-                    <table className="attendance-table">
-                        <thead>
-                            <tr>
-                                <th>S.No</th>
-                                <th>EMP ID</th>
-                                <th>Name</th>
-                                <th>Department</th>
-                                <th>Designation</th>
-                                <th>Email</th>
-                                {isAggregate ? (
-                                    <>
-                                        <th>Total Present</th>
-                                        <th>Total Absent</th>
-                                        <th>Total Late</th>
-                                        <th>Total Hrs</th>
-                                        <th>Avg Hrs/Day</th>
-                                    </>
-                                ) : (
-                                    <>
-                                        <th>Status</th>
-                                        <th>Punch In</th>
-                                        <th>Punch Out</th>
-                                        <th>Working Hrs</th>
-                                        <th>Late</th>
-                                    </>
-                                )}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filteredData.length > 0 ? (
-                                filteredData.map((record, index) => (
-                                    <tr key={record.emp_id || index}>
-                                        <td>{record.s_no}</td>
-                                        <td className="emp-id">{record.emp_id || '-'}</td>
-                                        <td>
-                                            <div className="name-cell">
-                                                {record.photo_path ? (
-                                                    <img
-                                                        src={fixImageUrl(record.photo_path)}
-                                                        alt={record.name}
-                                                        className="mini-avatar"
-                                                        onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
-                                                    />
-                                                ) : null}
-                                                <div
-                                                    className="mini-avatar-placeholder"
-                                                    style={{ display: record.photo_path ? 'none' : 'flex' }}
-                                                >
-                                                    {record.name ? record.name.charAt(0).toUpperCase() : (record.email ? record.email.charAt(0).toUpperCase() : 'U')}
-                                                </div>
-                                                <span>{record.name}</span>
-                                            </div>
-                                        </td>
-                                        <td>{record.department || '-'}</td>
-                                        <td>{record.designation || '-'}</td>
-                                        <td style={{ color: 'var(--text-secondary)' }}>{record.email || '-'}</td>
-                                        {isAggregate ? (
-                                            <>
-                                                <td style={{ color: '#10b981', fontWeight: 'bold' }}>{record.total_present}</td>
-                                                <td style={{ color: '#ef4444', fontWeight: 'bold' }}>{record.total_absent}</td>
-                                                <td style={{ color: '#f97316', fontWeight: 'bold' }}>{record.total_late}</td>
-                                                <td>{record.total_working_hours}</td>
-                                                <td>{record.avg_working_hours}</td>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <td>
-                                                    <span className={`status-badge ${record.status.toLowerCase().replace(' ', '-')}`}>
-                                                        {record.status}
-                                                    </span>
-                                                </td>
-                                                <td className="time-cell">{record.punch_in || '-'}</td>
-                                                <td className="time-cell">{record.punch_out || '-'}</td>
-                                                <td className="time-cell">{record.working_hours || '-'}</td>
-                                                <td>
-                                                    {record.is_late ? (
-                                                        <span className="status-badge late" style={{ backgroundColor: 'rgba(249,115,22,0.15)', color: '#f97316' }}>Late</span>
-                                                    ) : record.status === 'Present' ? (
-                                                        <span className="status-badge on-time" style={{ backgroundColor: 'rgba(16,185,129,0.15)', color: '#10b981' }}>On Time</span>
-                                                    ) : '-'}
-                                                </td>
-                                            </>
-                                        )}
-                                    </tr>
-                                ))
-                            ) : (
-                                <tr>
-                                    <td colSpan={isAggregate ? "10" : "10"} className="no-data">
-                                        No attendance records found for this {isAggregate ? 'date range' : 'date'}.
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                )}
-            </div>
+  return (
+    <div className="attendance-report-container product-surface-page">
+      <div className="report-header product-page-header">
+        <div className="report-title-area">
+          {setActiveTab && <button className="btn-back-clean" onClick={() => setActiveTab('dashboard')}><ArrowLeft size={15} /> Back</button>}
+          <div><h2>{title}</h2><p>Database-backed first-in / last-out attendance records.</p></div>
         </div>
-    );
+
+        <div className="report-actions compact-toolbar">
+          <div className="search-bar"><Search size={15} /><input placeholder="Employee ID, name or department" value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} /></div>
+          <label className="status-filter"><Filter size={14} /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>All</option><option>Present</option><option>Absent</option><option>Late</option></select></label>
+          {isAggregate ? (
+            <div className="date-range-control"><Calendar size={14} /><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /><span>to</span><input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></div>
+          ) : (
+            <label className="date-picker-wrap"><Calendar size={14} /><input type="date" value={targetDate} onChange={(event) => setTargetDate(event.target.value)} /></label>
+          )}
+          <button className="btn-export" onClick={exportToCSV}><FileSpreadsheet size={14} /> CSV</button>
+          <button className="btn-export" onClick={exportToPDF}><FileText size={14} /> PDF</button>
+        </div>
+      </div>
+
+      <div className="summary-bar compact-summary-bar">
+        <div className="summary-card present"><Users size={16} /><span><strong>{metrics.present}</strong> Present</span></div>
+        <div className="summary-card absent"><UserX size={16} /><span><strong>{metrics.absent}</strong> Absent</span></div>
+        <div className="summary-card late"><AlertTriangle size={16} /><span><strong>{metrics.late}</strong> Late</span></div>
+        <div className="summary-card total"><Clock size={16} /><span><strong>{metrics.total}</strong> Employees</span></div>
+      </div>
+
+      {error && <div className="error-message attendance-error">{error}</div>}
+
+      <div className="table-container attendance-table-shell">
+        {loading ? (
+          <div className="loading-state"><div className="spinner" /><p>Loading attendance...</p></div>
+        ) : (
+          <table className="attendance-table">
+            <thead>
+              <tr>
+                <th>#</th><th>EMP ID</th><th>Employee</th><th>Department</th><th>Designation</th><th>Email</th>
+                {isAggregate ? <><th>Present</th><th>Absent</th><th>Late</th><th>Total Hrs</th><th>Avg / Day</th></> : <><th>Status</th><th>First In</th><th>Last Out</th><th>Working Hrs</th><th>Arrival</th></>}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredData.length ? filteredData.map((record, index) => (
+                <tr key={`${record.emp_id || record.name || 'employee'}-${index}`}>
+                  <td>{record.s_no || index + 1}</td>
+                  <td className="emp-id">{record.emp_id || '-'}</td>
+                  <td><div className="name-cell">
+                    <span className="mini-avatar-wrap">
+                      {record.photo_path && <AuthenticatedImage src={record.photo_path} alt={record.name || 'Employee'} className="mini-avatar" />}
+                      <span className="mini-avatar-placeholder">{String(record.name || record.email || 'U').charAt(0).toUpperCase()}</span>
+                    </span>
+                    <span>{record.name || '-'}</span>
+                  </div></td>
+                  <td>{record.department || '-'}</td><td>{record.designation || '-'}</td><td className="muted-cell">{record.email || '-'}</td>
+                  {isAggregate ? (
+                    <><td className="metric-positive">{record.total_present || 0}</td><td className="metric-negative">{record.total_absent || 0}</td><td className="metric-warning">{record.total_late || 0}</td><td>{record.total_working_hours || '-'}</td><td>{record.avg_working_hours || '-'}</td></>
+                  ) : (
+                    <><td><span className={`status-badge ${String(record.status || 'absent').toLowerCase().replace(/\s+/g, '-')}`}>{record.status || 'Absent'}</span></td><td className="time-cell">{record.punch_in || '-'}</td><td className="time-cell">{record.punch_out || '-'}</td><td className="time-cell">{record.working_hours || '-'}</td><td>{record.is_late || record.status === 'Late' ? <span className="status-badge late">Late</span> : record.status === 'Present' ? <span className="status-badge on-time">On time</span> : '-'}</td></>
+                  )}
+                </tr>
+              )) : <tr><td colSpan={11} className="no-data">No attendance records match this selection.</td></tr>}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default AttendanceReport;

@@ -1,9 +1,17 @@
-from pydantic import BaseModel, validator
-from pydantic import BaseModel, validator
-from typing import Optional, List, Dict, Any
+from __future__ import annotations
+
 from datetime import datetime
-import re
+from typing import Optional, List, Dict, Any
 import ipaddress
+import os
+import re
+
+from pydantic import BaseModel, field_validator
+
+CAMERA_ROLES = {"ENTRY", "EXIT", "BIDIRECTIONAL", "REFERENCE_ONLY"}
+CAMERA_DIRECTIONS = {"IN", "OUT", "AUTO", "NONE"}
+CAMERA_IN_SIDES = {"POSITIVE", "NEGATIVE"}
+
 
 class CameraCollection(BaseModel):
     id: str
@@ -13,26 +21,31 @@ class CameraCollection(BaseModel):
     camera_count: int = 0
     company_id: Optional[str] = None
 
+
 class CollectionCreateRequest(BaseModel):
     name: str
     description: Optional[str] = None
     company_id: Optional[str] = None
-    
-    @validator('name')
-    def validate_name(cls, v):
-        if not v or not v.strip():
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str):
+        if not value or not value.strip():
             raise ValueError("Collection name is required")
-        return v.strip()
+        return value.strip()
+
 
 class CollectionUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    
-    @validator('name')
-    def validate_name(cls, v):
-        if v is not None and (not v or not v.strip()):
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: Optional[str]):
+        if value is not None and not value.strip():
             raise ValueError("Collection name cannot be empty")
-        return v.strip() if v else None
+        return value.strip() if value else None
+
 
 class CameraValidationRequest(BaseModel):
     ip: str
@@ -41,11 +54,13 @@ class CameraValidationRequest(BaseModel):
     exclude_ip: Optional[str] = None
     company_id: Optional[str] = None
 
+
 class CameraValidationResponse(BaseModel):
     valid: bool
     error: Optional[str] = None
     type: Optional[str] = None
     existingCollection: Optional[str] = None
+
 
 class EnhancedCamera(BaseModel):
     id: int
@@ -55,6 +70,15 @@ class EnhancedCamera(BaseModel):
     collection_name: Optional[str] = None
     ip_address: Optional[str] = None
     location: Optional[str] = None
+    site_id: Optional[str] = None
+    zone_id: Optional[str] = None
+    camera_role: str = "BIDIRECTIONAL"
+    direction: str = "AUTO"
+    line_x1: Optional[float] = None
+    line_y1: Optional[float] = None
+    line_x2: Optional[float] = None
+    line_y2: Optional[float] = None
+    in_side: str = "POSITIVE"
     status: str = "inactive"
     created_at: datetime
     last_seen: Optional[datetime] = None
@@ -62,71 +86,137 @@ class EnhancedCamera(BaseModel):
     is_active: bool = False
     company_id: Optional[str] = None
 
+
 class CameraCreateRequest(BaseModel):
     name: str
     rtsp_url: str
     collection_id: Optional[str] = None
     location: Optional[str] = None
+    site_id: Optional[str] = None
+    zone_id: Optional[str] = None
+    camera_role: str = "BIDIRECTIONAL"
+    direction: str = "AUTO"
+    line_x1: Optional[float] = None
+    line_y1: Optional[float] = None
+    line_x2: Optional[float] = None
+    line_y2: Optional[float] = None
+    in_side: str = "POSITIVE"
     company_id: Optional[str] = None
 
-    @validator('rtsp_url')
-    def validate_rtsp_url(cls, v):
-        if not v:
-            raise ValueError("RTSP URL is required")
-        
-        v = v.strip()
-        
-        # Allow local camera indices (0, 1, 2, etc.) for testing
-        if v.isdigit():
-            return v
-        
-        if not (v.startswith('rtsp://') or v.startswith('http://')):
-            raise ValueError("Stream URL must start with rtsp://, http://, or be a camera index (0, 1, 2)")
-        
-        # Extract IP address for validation
-        ip_pattern = r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
-        match = re.search(ip_pattern, v)
-        if not match:
-            raise ValueError("Could not extract IP address from stream URL")
-        
-        ip = match.group(1)
-        try:
-            ip_obj = ipaddress.IPv4Address(ip)
-            # Check if it's a private IP
-            if not ip_obj.is_private:
-                raise ValueError(f"IP address {ip} must be within private network ranges")
-        except ipaddress.AddressValueError:
-            raise ValueError(f"Invalid IP address: {ip}")
-        
-        return v
+    @field_validator("rtsp_url")
+    @classmethod
+    def validate_rtsp_url(cls, value: str):
+        if not value:
+            raise ValueError("Stream URL is required")
+        value = value.strip()
+        if value.isdigit():
+            return value
+        if not value.lower().startswith(("rtsp://", "http://", "https://")):
+            raise ValueError("Stream URL must start with rtsp://, http://, https:// or be a local camera index")
+        ip = extract_ip_from_url(value)
+        if ip:
+            result = validate_private_ip(ip)
+            if not result["isValid"] and os.getenv("FRS_ALLOW_PUBLIC_CAMERA_URLS", "0").lower() not in {"1", "true", "yes"}:
+                raise ValueError(result["message"])
+        return value
 
-    @validator('name')
-    def validate_name(cls, v):
-        if not v or not v.strip():
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str):
+        if not value or not value.strip():
             raise ValueError("Camera name is required")
-        return v.strip()
+        return value.strip()
+
+    @field_validator("camera_role")
+    @classmethod
+    def validate_role(cls, value: str):
+        value = (value or "BIDIRECTIONAL").upper()
+        if value not in CAMERA_ROLES:
+            raise ValueError(f"camera_role must be one of {sorted(CAMERA_ROLES)}")
+        return value
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, value: str):
+        value = (value or "AUTO").upper()
+        if value not in CAMERA_DIRECTIONS:
+            raise ValueError(f"direction must be one of {sorted(CAMERA_DIRECTIONS)}")
+        return value
+
+    @field_validator("line_x1", "line_y1", "line_x2", "line_y2")
+    @classmethod
+    def validate_line_coordinate(cls, value: Optional[float]):
+        if value is None:
+            return value
+        value = float(value)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Virtual-line coordinates must be normalized between 0 and 1")
+        return value
+
+    @field_validator("in_side")
+    @classmethod
+    def validate_in_side(cls, value: str):
+        value = (value or "POSITIVE").upper()
+        if value not in CAMERA_IN_SIDES:
+            raise ValueError(f"in_side must be one of {sorted(CAMERA_IN_SIDES)}")
+        return value
+
 
 class CameraUpdateRequest(BaseModel):
     name: Optional[str] = None
     rtsp_url: Optional[str] = None
     collection_id: Optional[str] = None
     location: Optional[str] = None
+    site_id: Optional[str] = None
+    zone_id: Optional[str] = None
+    camera_role: Optional[str] = None
+    direction: Optional[str] = None
+    line_x1: Optional[float] = None
+    line_y1: Optional[float] = None
+    line_x2: Optional[float] = None
+    line_y2: Optional[float] = None
+    in_side: Optional[str] = None
 
-    @validator('rtsp_url')
-    def validate_rtsp_url(cls, v):
-        if v is not None:
-            v = v.strip()
-            # Allow local camera indices
-            if v.isdigit():
-                return v
-            return CameraCreateRequest.validate_rtsp_url(v)
-        return v
+    @field_validator("rtsp_url")
+    @classmethod
+    def validate_rtsp_url(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return CameraCreateRequest.validate_rtsp_url(value)
 
-    @validator('name')
-    def validate_name(cls, v):
-        if v is not None:
-            return CameraCreateRequest.validate_name(v)
-        return v
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return CameraCreateRequest.validate_name(value)
+
+    @field_validator("camera_role")
+    @classmethod
+    def validate_role(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return CameraCreateRequest.validate_role(value)
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return CameraCreateRequest.validate_direction(value)
+
+    @field_validator("line_x1", "line_y1", "line_x2", "line_y2")
+    @classmethod
+    def validate_line_coordinate(cls, value: Optional[float]):
+        return CameraCreateRequest.validate_line_coordinate(value)
+
+    @field_validator("in_side")
+    @classmethod
+    def validate_in_side(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return CameraCreateRequest.validate_in_side(value)
+
 
 class CameraListResponse(BaseModel):
     cameras: List[EnhancedCamera]
@@ -137,47 +227,32 @@ class CameraListResponse(BaseModel):
     total_pages: int = 1
     cameras_per_page: int = 6
 
+
 class CameraOperationResponse(BaseModel):
     success: bool
     message: str
     camera: Optional[EnhancedCamera] = None
     error: Optional[str] = None
 
+
 def extract_ip_from_url(url: str) -> Optional[str]:
-    """Extract IP address from RTSP/HTTP URL or camera index for local cameras"""
-    # Check if it's a local camera index (just a number)
-    if re.match(r'^\d+$', url):
-        return url  # Return the index as-is for camera indices
-    
-    ip_pattern = r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
-    match = re.search(ip_pattern, url)
+    if re.match(r"^\d+$", str(url or "")):
+        return str(url)
+    match = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", str(url or ""))
     return match.group(1) if match else None
 
+
 def validate_private_ip(ip: str) -> Dict[str, Any]:
-    """Validate if IP is within private network ranges or is a valid camera index"""
-    # Check if it's a local camera index (just a number)
-    if re.match(r'^\d+$', ip):
-        return {
-            "isValid": True,
-            "ip": ip,
-            "type": "camera_index",
-            "message": f"Valid local camera index: {ip}"
-        }
-    
+    if re.match(r"^\d+$", str(ip or "")):
+        return {"isValid": True, "ip": ip, "type": "camera_index", "message": f"Valid local camera index: {ip}"}
     try:
         ip_obj = ipaddress.IPv4Address(ip)
-        is_valid = ip_obj.is_private
-        
+        is_valid = bool(ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local)
         return {
             "isValid": is_valid,
             "ip": ip,
             "type": "private" if is_valid else "public",
-            "message": "Valid private IP" if is_valid else "IP must be within private network ranges"
+            "message": "Valid private IP" if is_valid else "Camera IP must be private unless FRS_ALLOW_PUBLIC_CAMERA_URLS is enabled",
         }
     except ipaddress.AddressValueError:
-        return {
-            "isValid": False,
-            "ip": ip,
-            "type": "invalid",
-            "message": "Invalid IP address format"
-        }
+        return {"isValid": False, "ip": ip, "type": "invalid", "message": "Invalid IP address format"}

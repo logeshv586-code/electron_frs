@@ -1,58 +1,49 @@
-# face_pipeline.py
 # -*- coding: utf-8 -*-
-"""
-Long-distance face detection + recognition pipeline.
-Uses InsightFace (SCRFD) with:
-  - CLAHE contrast enhancement for low-light/far cameras
-  - Elevated det_size (1280x1280) for resolving small/distant faces
-  - Face upscaling (Lanczos4 + unsharp mask) before encoding
-  - MIN_FACE_PX = 20 to accept distant detections
-  - Tracking persistence so labels don't flicker
+"""Production live face detection + conservative dlib recognition.
+
+Design goal: false acceptance is more harmful than an Unknown result for attendance.
+SCRFD/InsightFace is used for multi-face detection; enrollment/live identity uses the
+same dlib 128-D template bank generated during registration. Identity is released only
+after temporal confirmation on one track and one physical face cannot share an identity
+with another face in the same frame.
 """
 
-import cv2
-import numpy as np
-import face_recognition
-from insightface.app import FaceAnalysis
-from typing import List, Tuple, Dict, Any, Optional
-from collections import defaultdict
-import threading
-import os
-import time
+from __future__ import annotations
+
 import logging
-from save_face import save_face_image
+import os
+import threading
+import time
+from collections import Counter, defaultdict, deque
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import cv2
+import face_recognition
+import numpy as np
+from insightface.app import FaceAnalysis
+
+from save_face import record_face_event, save_face_image
 
 logger = logging.getLogger(__name__)
 
-# ----------------------- Tuning constants ----------------------------------
-TOLERANCE = 0.50          # base face_recognition distance threshold
-LONG_RANGE_TOLERANCE = 0.58
-LONG_RANGE_FACE_PX = 72
-VERY_LONG_RANGE_FACE_PX = 42
-MATCH_MARGIN = 0.025
-MIN_SAVE_INTERVAL = 5.0   # seconds between saves for same label
-UNKNOWN_MIN_SAVE_INTERVAL = 12.0
+# Detection remains aggressive; recognition/attendance are intentionally stricter.
+DETECTION_MIN_FACE_PX = int(os.getenv("FACE_DETECTION_MIN_PX", "20"))
+DEFAULT_RECOGNITION_MIN_PX = int(os.getenv("FACE_RECOGNITION_MIN_PX", "56"))
+DEFAULT_ATTENDANCE_MIN_PX = int(os.getenv("FACE_ATTENDANCE_MIN_PX", "72"))
+DEFAULT_DISTANCE_THRESHOLD = float(os.getenv("FACE_MATCH_DISTANCE", "0.46"))
+DEFAULT_DISTANT_THRESHOLD = float(os.getenv("FACE_DISTANT_MATCH_DISTANCE", "0.42"))
+DEFAULT_MATCH_MARGIN = float(os.getenv("FACE_MATCH_MARGIN", "0.04"))
+DEFAULT_CONFIRM_FRAMES = int(os.getenv("FACE_CONFIRM_FRAMES", "3"))
+DEFAULT_CONFIRM_WINDOW = int(os.getenv("FACE_CONFIRM_WINDOW", "5"))
+MAX_TRACK_AGE_SECONDS = float(os.getenv("FACE_TRACK_MAX_AGE_SECONDS", "1.25"))
+MAX_TRACK_AGE_FRAMES = int(os.getenv("FACE_TRACK_MAX_AGE_FRAMES", "30"))
+EVENT_INTERVAL_SECONDS = float(os.getenv("FACE_EVENT_INTERVAL_SECONDS", "5"))
+KNOWN_IMAGE_INTERVAL_SECONDS = float(os.getenv("FACE_KNOWN_IMAGE_INTERVAL_SECONDS", "60"))
+UNKNOWN_IMAGE_INTERVAL_SECONDS = float(os.getenv("FACE_UNKNOWN_IMAGE_INTERVAL_SECONDS", "60"))
+EMBEDDING_CACHE_SECONDS = int(os.getenv("FACE_EMBEDDING_CACHE_SECONDS", "300"))
 
-# -- Long-distance detection -------------------------------------------------
-#   The primary long-distance mechanism is the elevated det_size=(1280,1280)
-#   passed to InsightFace at init time. This alone ~4* the effective resolution.
-#   MIN_FACE_PX is lowered so small/distant detections are not filtered out.
-MIN_FACE_PX = 20          # absolute minimum face size in pixels (was 50-60)
-
-#   Upscale small face crops to this size before encoding (improves accuracy)
-ENCODING_MIN_SIZE = 128   # px; insightface & dlib work best >=112
-ENCODING_MAX_SIZE = 224   # don't upscale beyond this to stay fast
-
-# -- Tracking ----------------------------------------------------------------
-IOU_THRESHOLD        = 0.22
-MAX_TRACK_AGE_FRAMES = 12
-MAX_TRACK_AGE_SECONDS = 0.75
-BEST_QUALITY_RESET_SECONDS = 30.0
-# ---------------------------------------------------------------------------
-
-# Singletons / shared state
 face_apps: Dict[int, Any] = {}
-face_app   = None
+face_app = None
 available_gpus: List[int] = []
 runtime_profile: Dict[str, Any] = {
     "device": "uninitialized",
@@ -62,419 +53,31 @@ runtime_profile: Dict[str, Any] = {
     "providers": [],
 }
 
+data_directory = ""
 company_embeddings: Dict[str, Dict[str, Any]] = {}
-embedding_lock = threading.Lock()
-data_directory: str = ""
-
+embedding_lock = threading.RLock()
 person_tracking: Dict[str, Dict[int, Dict[str, Any]]] = defaultdict(dict)
 track_id_counter: Dict[str, int] = defaultdict(int)
-tracking_lock = threading.Lock()
+tracking_lock = threading.RLock()
+_frame_counters: Dict[str, int] = defaultdict(int)
 
-best_face_quality: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)
 
-# ===========================================================================
-#   UTILITY HELPERS
-# ===========================================================================
+def _settings(company_id: str) -> Dict[str, Any]:
+    try:
+        from auth.storage import get_settings
+        return get_settings(company_id).get("recognition", {})
+    except Exception:
+        return {}
+
 
 def _apply_clahe(bgr: np.ndarray) -> np.ndarray:
-    """Contrast Limited Adaptive Histogram Equalisation - helps dull/far cameras."""
-    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    lab = cv2.merge([clahe.apply(l), a, b])
-    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-
-
-def _upscale_for_encoding(crop_bgr: np.ndarray) -> np.ndarray:
-    """
-    Upscale a small face crop to at least ENCODING_MIN_SIZE so that
-    face_recognition produces a reliable 128-d embedding.
-    Uses Lanczos4 (sharpest interpolation for upscaling).
-    """
-    h, w = crop_bgr.shape[:2]
-    short = min(h, w)
-    if short >= ENCODING_MIN_SIZE:
-        return crop_bgr                         # already large enough
-
-    scale     = ENCODING_MIN_SIZE / short
-    # Cap to ENCODING_MAX_SIZE
-    if short * scale > ENCODING_MAX_SIZE:
-        scale = ENCODING_MAX_SIZE / short
-    new_w     = max(int(w * scale), ENCODING_MIN_SIZE)
-    new_h     = max(int(h * scale), ENCODING_MIN_SIZE)
-    upscaled  = cv2.resize(crop_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-    # Gentle unsharp-mask after upscaling to recover edge definition
-    blurred   = cv2.GaussianBlur(upscaled, (0, 0), sigmaX=1.0)
-    upscaled  = cv2.addWeighted(upscaled, 1.5, blurred, -0.5, 0)
-    return upscaled
-
-
-def _enhance_for_encoding(crop_bgr: np.ndarray) -> np.ndarray:
-    if crop_bgr is None or crop_bgr.size == 0:
-        return crop_bgr
     try:
-        enhanced = _apply_clahe(crop_bgr)
-        blurred = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=0.8)
-        return cv2.addWeighted(enhanced, 1.35, blurred, -0.35, 0)
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        return cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
     except Exception:
-        return crop_bgr
-
-
-def _crop_with_location(
-    frame: np.ndarray,
-    bbox: Tuple[int, int, int, int],
-    padding: float,
-) -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int, int, int]]]:
-    if frame is None or frame.size == 0:
-        return None, None
-
-    H, W = frame.shape[:2]
-    x1, y1, x2, y2 = bbox
-    fw, fh = max(1, x2 - x1), max(1, y2 - y1)
-    px, py = int(fw * padding), int(fh * padding)
-    cx1, cy1 = max(0, x1 - px), max(0, y1 - py)
-    cx2, cy2 = min(W, x2 + px), min(H, y2 + py)
-    if cx2 <= cx1 or cy2 <= cy1:
-        return None, None
-
-    crop = frame[cy1:cy2, cx1:cx2].copy()
-    loc = (y1 - cy1, x2 - cx1, y2 - cy1, x1 - cx1)
-    return crop, loc
-
-
-def _scale_crop_and_location(
-    crop_bgr: np.ndarray,
-    loc: Tuple[int, int, int, int],
-    face_target_px: int,
-) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-    top, right, bottom, left = loc
-    face_w = max(1, right - left)
-    face_h = max(1, bottom - top)
-    short = min(face_w, face_h)
-    if short >= face_target_px:
-        return crop_bgr, loc
-
-    scale = face_target_px / float(short)
-    if short * scale > ENCODING_MAX_SIZE:
-        scale = ENCODING_MAX_SIZE / float(short)
-
-    h, w = crop_bgr.shape[:2]
-    new_w = max(1, int(w * scale))
-    new_h = max(1, int(h * scale))
-    upscaled = cv2.resize(crop_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-    blurred = cv2.GaussianBlur(upscaled, (0, 0), sigmaX=1.0)
-    upscaled = cv2.addWeighted(upscaled, 1.5, blurred, -0.5, 0)
-    scaled_loc = (
-        int(top * scale),
-        int(right * scale),
-        int(bottom * scale),
-        int(left * scale),
-    )
-    return upscaled, scaled_loc
-
-
-def _encode_face_variants(
-    frame_bgr: np.ndarray,
-    bbox: Tuple[int, int, int, int],
-    min_side: int,
-) -> List[np.ndarray]:
-    """
-    Try a few aligned crops for distant faces. Far boxes are often a little
-    tight or soft, so a single full-crop descriptor can miss a known person.
-    """
-    encodings: List[np.ndarray] = []
-    paddings = (0.0, 0.18, 0.34) if min_side < LONG_RANGE_FACE_PX else (0.0, 0.18)
-    target = 160 if min_side < VERY_LONG_RANGE_FACE_PX else ENCODING_MIN_SIZE
-
-    for padding in paddings:
-        crop, loc = _crop_with_location(frame_bgr, bbox, padding)
-        if crop is None or loc is None or crop.size == 0:
-            continue
-
-        variants = [crop]
-        if min_side < LONG_RANGE_FACE_PX:
-            variants.append(_enhance_for_encoding(crop))
-
-        for variant in variants:
-            prepared, prepared_loc = _scale_crop_and_location(variant, loc, target)
-            rgb = cv2.cvtColor(prepared, cv2.COLOR_BGR2RGB)
-            try:
-                encs = face_recognition.face_encodings(
-                    rgb,
-                    known_face_locations=[prepared_loc],
-                    num_jitters=1,
-                    model='large'
-                )
-                if encs:
-                    encodings.extend(encs)
-            except Exception:
-                continue
-
-    return encodings
-
-
-def _threshold_for_face_size(min_side: int, det_conf: float) -> float:
-    if min_side < VERY_LONG_RANGE_FACE_PX:
-        return LONG_RANGE_TOLERANCE if det_conf >= 0.55 else 0.54
-    if min_side < LONG_RANGE_FACE_PX:
-        return 0.56 if det_conf >= 0.50 else 0.53
-    return TOLERANCE
-
-
-def _match_known_face(
-    candidate_encodings: List[np.ndarray],
-    known_enc: List[np.ndarray],
-    known_names: List[str],
-    min_side: int,
-    det_conf: float,
-) -> Tuple[str, float, Optional[np.ndarray], Optional[float]]:
-    if not candidate_encodings or len(known_enc) == 0:
-        return "Unknown", det_conf, None, None
-
-    threshold = _threshold_for_face_size(min_side, det_conf)
-    best: Optional[Dict[str, Any]] = None
-
-    for enc in candidate_encodings:
-        distances = face_recognition.face_distance(known_enc, enc)
-        if len(distances) == 0:
-            continue
-
-        sorted_idx = np.argsort(distances)
-        best_idx = int(sorted_idx[0])
-        best_name = known_names[best_idx]
-        best_dist = float(distances[best_idx])
-        if best_dist > threshold:
-            continue
-
-        per_name: Dict[str, Dict[str, float]] = {}
-        for idx, dist in enumerate(distances):
-            dist_f = float(dist)
-            person = known_names[idx]
-            entry = per_name.setdefault(person, {"min": dist_f, "votes": 0})
-            entry["min"] = min(entry["min"], dist_f)
-            if dist_f <= threshold + 0.02:
-                entry["votes"] += 1
-
-        same_person_images = known_names.count(best_name)
-        required_votes = 1 if same_person_images <= 1 else 2
-        if len(set(known_names)) == 1:
-            required_votes = 1
-
-        other_mins = [
-            item["min"] for person, item in per_name.items()
-            if person != best_name
-        ]
-        second_best = min(other_mins) if other_mins else 1.0
-        margin = second_best - best_dist
-
-        if per_name[best_name]["votes"] < required_votes:
-            continue
-        if other_mins and margin < MATCH_MARGIN and best_dist > TOLERANCE:
-            continue
-
-        score = (threshold - best_dist) + min(per_name[best_name]["votes"], 5) * 0.015 + max(margin, 0) * 0.2
-        if best is None or score > best["score"]:
-            best = {
-                "name": best_name,
-                "conf": max(0.0, 1.0 - best_dist),
-                "encoding": enc,
-                "distance": best_dist,
-                "score": score,
-                "votes": per_name[best_name]["votes"],
-                "threshold": threshold,
-            }
-
-    if best is None:
-        return "Unknown", det_conf, None, None
-
-    logger.debug(
-        "[MATCH] %s | dist=%.3f | thr=%.2f | votes=%s | conf=%.2f | size=%spx",
-        best["name"], best["distance"], best["threshold"], best["votes"], best["conf"], min_side
-    )
-    return best["name"], best["conf"], best["encoding"], best["distance"]
-
-
-def _calculate_iou(b1: Tuple, b2: Tuple) -> float:
-    x1 = max(b1[0], b2[0]); y1 = max(b1[1], b2[1])
-    x2 = min(b1[2], b2[2]); y2 = min(b1[3], b2[3])
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-    inter = (x2 - x1) * (y2 - y1)
-    a1    = (b1[2] - b1[0]) * (b1[3] - b1[1])
-    a2    = (b2[2] - b2[0]) * (b2[3] - b2[1])
-    return inter / (a1 + a2 - inter + 1e-6)
-
-
-def _bbox_area(b: Tuple) -> float:
-    return max(0, b[2] - b[0]) * max(0, b[3] - b[1])
-
-
-def _overlap_ratio(b1: Tuple, b2: Tuple) -> float:
-    x1 = max(b1[0], b2[0]); y1 = max(b1[1], b2[1])
-    x2 = min(b1[2], b2[2]); y2 = min(b1[3], b2[3])
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-    inter = (x2 - x1) * (y2 - y1)
-    return inter / (min(_bbox_area(b1), _bbox_area(b2)) + 1e-6)
-
-
-def _center_distance(b1: Tuple, b2: Tuple) -> float:
-    c1x = (b1[0] + b1[2]) * 0.5
-    c1y = (b1[1] + b1[3]) * 0.5
-    c2x = (b2[0] + b2[2]) * 0.5
-    c2y = (b2[1] + b2[3]) * 0.5
-    return float(np.hypot(c1x - c2x, c1y - c2y))
-
-
-def _is_same_face_box(b1: Tuple, b2: Tuple) -> bool:
-    """Check if two bounding boxes represent the SAME face.
-    Made strict to avoid merging distinct people in crowds."""
-    iou = _calculate_iou(b1, b2)
-    overlap = _overlap_ratio(b1, b2)
-    center_dist = _center_distance(b1, b2)
-    max_dim = max(
-        b1[2] - b1[0],
-        b1[3] - b1[1],
-        b2[2] - b2[0],
-        b2[3] - b2[1],
-        1,
-    )
-
-    # High IOU means essentially the same box
-    if iou >= 0.45:
-        return True
-
-    # Very high overlap on the smaller box
-    if overlap >= 0.65:
-        return True
-
-    # Centers very close AND significant overlap (same face shifted slightly)
-    if center_dist <= max_dim * 0.3 and iou >= 0.15:
-        return True
-
-    return False
-
-
-def _dedupe_detections(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove duplicate detections. Keeps distinct faces even in crowds."""
-    def score(item: Dict[str, Any]) -> Tuple[int, float, float]:
-        bbox = item.get("bbox") or (0, 0, 0, 0)
-        is_known = 1 if item.get("name") != "Unknown" else 0
-        return (is_known, float(item.get("conf") or 0), _bbox_area(bbox))
-
-    kept: List[Dict[str, Any]] = []
-    for det in sorted(items, key=score, reverse=True):
-        bbox = det.get("bbox")
-        if bbox is None:
-            continue
-        if any(_is_same_face_box(bbox, k.get("bbox")) for k in kept if k.get("bbox")):
-            continue
-        kept.append(det)
-    return kept
-
-
-def _calculate_face_quality(crop_bgr: np.ndarray, det_conf: float = 0.0) -> float:
-    """Score 0-1: sharpness * size * confidence."""
-    if crop_bgr is None or crop_bgr.size == 0:
-        return 0.0
-    h, w  = crop_bgr.shape[:2]
-    gray  = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-    sharp = min(cv2.Laplacian(gray, cv2.CV_64F).var() / 500.0, 1.0)
-    size  = min((h * w) / 40000.0, 1.0)
-    conf  = float(np.clip(det_conf, 0, 1))
-    return float(np.clip(sharp * 0.5 + size * 0.25 + conf * 0.25, 0, 1))
-
-
-def _extract_face_crop(
-    frame: np.ndarray,
-    bbox: Tuple,
-    padding: float = 0.3,
-    nearby_bboxes: Optional[List[Tuple]] = None,
-) -> Optional[np.ndarray]:
-    """Extract a face crop with adaptive padding, crowd-aware clipping.
-
-    When nearby_bboxes are provided (crowd scenario), the padding is
-    automatically reduced on sides where another face is close, so the
-    saved crop does not include neighbouring people.
-    """
-    if frame is None or frame.size == 0:
-        return None
-    H, W  = frame.shape[:2]
-    x1, y1, x2, y2 = bbox
-    face_w = x2 - x1
-    face_h = y2 - y1
-    min_side = min(face_w, face_h)
-
-    # Adaptive padding: small/distant faces get much more context
-    if min_side < 40:
-        padding = max(padding, 0.7)
-    elif min_side < 80:
-        padding = max(padding, 0.5)
-
-    pw = int(face_w * padding)
-    ph = int(face_h * padding)
-
-    # Default expanded region
-    crop_x1 = max(0, x1 - pw)
-    crop_y1 = max(0, y1 - ph)
-    crop_x2 = min(W, x2 + pw)
-    crop_y2 = min(H, y2 + ph)
-
-    # Crowd-aware clipping: shrink padding where other faces are nearby
-    if nearby_bboxes:
-        for nb in nearby_bboxes:
-            nx1, ny1, nx2, ny2 = nb
-            # Skip self
-            if nx1 == x1 and ny1 == y1 and nx2 == x2 and ny2 == y2:
-                continue
-            # Only clip if neighbouring face is close (within 2x padding)
-            # Left neighbour
-            if nx2 > crop_x1 and nx2 <= x1 and nx1 < x1:
-                crop_x1 = max(crop_x1, nx2)
-            # Right neighbour
-            if nx1 < crop_x2 and nx1 >= x2 and nx2 > x2:
-                crop_x2 = min(crop_x2, nx1)
-            # Top neighbour
-            if ny2 > crop_y1 and ny2 <= y1 and ny1 < y1:
-                crop_y1 = max(crop_y1, ny2)
-            # Bottom neighbour
-            if ny1 < crop_y2 and ny1 >= y2 and ny2 > y2:
-                crop_y2 = min(crop_y2, ny1)
-
-    # Ensure we at least keep the face bbox itself
-    crop_x1 = min(crop_x1, x1)
-    crop_y1 = min(crop_y1, y1)
-    crop_x2 = max(crop_x2, x2)
-    crop_y2 = max(crop_y2, y2)
-
-    crop = frame[crop_y1:crop_y2, crop_x1:crop_x2].copy()
-    if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
-        return None
-    return crop
-
-
-def _parse_det_size(value: Optional[str], default: Tuple[int, int]) -> Tuple[int, int]:
-    if not value:
-        return default
-    try:
-        cleaned = value.lower().replace("x", ",").replace(" ", "")
-        parts = [int(p) for p in cleaned.split(",") if p]
-        if len(parts) == 1:
-            parts = [parts[0], parts[0]]
-        if len(parts) >= 2 and parts[0] >= 320 and parts[1] >= 320:
-            return (parts[0], parts[1])
-    except Exception:
-        pass
-    logger.warning(f"Invalid det_size value '{value}', using {default}")
-    return default
-
-
-def _env_int(name: str, default: int, min_value: int = 1, max_value: int = 30) -> int:
-    try:
-        value = int(os.getenv(name, str(default)))
-        return max(min_value, min(max_value, value))
-    except Exception:
-        return default
+        return bgr
 
 
 def _available_onnx_providers() -> List[str]:
@@ -485,580 +88,760 @@ def _available_onnx_providers() -> List[str]:
         return []
 
 
-def get_runtime_profile() -> Dict[str, Any]:
-    """Return the current CPU/GPU tuning profile for stream workers."""
-    return dict(runtime_profile)
-
-
-# ===========================================================================
-#   INITIALISATION
-# ===========================================================================
-
 def check_gpu_availability() -> List[int]:
-    available = []
     providers = _available_onnx_providers()
-    if 'CUDAExecutionProvider' not in providers:
-        logger.info(f"CUDAExecutionProvider unavailable. ONNX providers: {providers or 'unknown'}")
-        return available
-
+    if "CUDAExecutionProvider" not in providers:
+        return []
     try:
         import subprocess
-        res = subprocess.run(['nvidia-smi', '--list-gpus'],
-                             capture_output=True, text=True, timeout=5)
-        count = len([l for l in res.stdout.strip().split('\n') if l.strip()])
-        available = list(range(count))
-        logger.info(f"Detected {count} CUDA GPU(s)")
+        result = subprocess.run(["nvidia-smi", "--list-gpus"], capture_output=True, text=True, timeout=5)
+        count = len([line for line in result.stdout.splitlines() if line.strip()])
+        return list(range(count))
     except Exception:
-        available = [0]
-    return available
+        return [0]
+
+
+def _parse_det_size(value: Optional[str], default: Tuple[int, int]) -> Tuple[int, int]:
+    if not value:
+        return default
+    try:
+        parts = [int(p) for p in value.lower().replace("x", ",").replace(" ", "").split(",") if p]
+        if len(parts) == 1:
+            parts *= 2
+        if len(parts) >= 2 and min(parts[:2]) >= 320:
+            return int(parts[0]), int(parts[1])
+    except Exception:
+        pass
+    return default
 
 
 def _select_runtime(ctx: int, requested_det_size: Tuple[int, int]) -> Dict[str, Any]:
     providers = _available_onnx_providers()
-    cuda_available = 'CUDAExecutionProvider' in providers
-    gpu_ids = check_gpu_availability() if cuda_available else []
-    wants_gpu = ctx >= 0
-    auto_gpu = ctx == -1 and bool(gpu_ids)
-
-    if (wants_gpu or auto_gpu) and gpu_ids:
-        selected_ctx = ctx if wants_gpu else gpu_ids[0]
-        if selected_ctx not in gpu_ids:
-            selected_ctx = gpu_ids[0]
-        gpu_det_size = _parse_det_size(os.getenv("FACE_DET_SIZE_GPU"), requested_det_size)
+    gpus = check_gpu_availability()
+    if gpus and (ctx >= 0 or ctx == -1):
+        selected = ctx if ctx in gpus else gpus[0]
         return {
             "device": "gpu",
-            "ctx": selected_ctx,
-            "det_size": gpu_det_size,
-            "process_every_n": _env_int("FACE_PROCESS_EVERY_N_GPU", 2, 1, 10),
+            "ctx": selected,
+            "det_size": _parse_det_size(os.getenv("FACE_DET_SIZE_GPU"), requested_det_size),
+            "process_every_n": max(1, int(os.getenv("FACE_PROCESS_EVERY_N_GPU", "2"))),
             "providers": providers,
-            "gpu_ids": gpu_ids,
+            "gpu_ids": gpus,
         }
-
-    cpu_default = (
-        min(int(requested_det_size[0]), 640),
-        min(int(requested_det_size[1]), 640),
-    )
-    cpu_det_size = _parse_det_size(os.getenv("FACE_DET_SIZE_CPU"), cpu_default)
+    cpu_default = (min(requested_det_size[0], 640), min(requested_det_size[1], 640))
     return {
         "device": "cpu",
         "ctx": -1,
-        "det_size": cpu_det_size,
-        "process_every_n": _env_int("FACE_PROCESS_EVERY_N_CPU", 5, 1, 30),
+        "det_size": _parse_det_size(os.getenv("FACE_DET_SIZE_CPU"), cpu_default),
+        "process_every_n": max(1, int(os.getenv("FACE_PROCESS_EVERY_N_CPU", "5"))),
         "providers": providers,
         "gpu_ids": [],
     }
 
 
 def _new_face_analysis(device: str):
-    providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if device == "gpu" else ['CPUExecutionProvider']
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == "gpu" else ["CPUExecutionProvider"]
     try:
-        return FaceAnalysis(allowed_modules=['detection'], providers=providers)
+        return FaceAnalysis(allowed_modules=["detection"], providers=providers)
     except TypeError:
-        return FaceAnalysis(allowed_modules=['detection'])
+        return FaceAnalysis(allowed_modules=["detection"])
 
 
-def init(data_dir: str,
-         ctx: int = -1,
-         det_size: Tuple[int, int] = (640, 640),
-         use_dual_gpu: bool = True) -> None:
-    """
-    Initialise the face pipeline.
-
-    For long-distance detection, pass a larger det_size such as (1280, 1280).
-    This alone ~quadruples the effective resolution InsightFace uses.
-    """
-    global face_app, face_apps, available_gpus, data_directory, runtime_profile
+def init(data_dir: str, ctx: int = -1, det_size: Tuple[int, int] = (640, 640), use_dual_gpu: bool = True) -> None:
+    global face_app, data_directory
     data_directory = data_dir
-
-    try:
-        from fr1 import load_known_faces  # noqa: F401 - just validate importability
-    except Exception as e:
-        raise ImportError("Cannot import load_known_faces from fr1.py") from e
-
-    with embedding_lock:
-        company_embeddings["_global"] = {"encodings": [], "names": [], "last_loaded": time.time()}
-
-    face_apps.clear()
-    available_gpus.clear()
     selected = _select_runtime(ctx, det_size)
-    runtime_profile.update(selected)
-    logger.info(
-        "Face runtime selected: device=%s ctx=%s det_size=%s process_every_n=%s providers=%s",
-        selected["device"],
-        selected["ctx"],
-        selected["det_size"],
-        selected["process_every_n"],
-        selected.get("providers") or "unknown",
-    )
+    runtime_profile.clear(); runtime_profile.update(selected)
+    face_apps.clear(); available_gpus.clear()
 
-    def _make_app(ctx_id: int, device: str) -> Optional[Any]:
-        try:
-            app = _new_face_analysis(device)
-            app.prepare(ctx_id=ctx_id, det_size=selected["det_size"])
-            label = f"GPU {ctx_id}" if device == "gpu" else "CPU"
-            logger.info(f"InsightFace ready on {label}, det_size={selected['det_size']}")
-            return app
-        except Exception as e:
-            logger.warning(f"Failed to initialise InsightFace on {device} ctx={ctx_id}: {e}")
-            return None
+    def make_app(ctx_id: int, device: str):
+        app = _new_face_analysis(device)
+        app.prepare(ctx_id=ctx_id, det_size=selected["det_size"])
+        return app
 
     if use_dual_gpu and selected["device"] == "gpu":
         for gpu_id in selected.get("gpu_ids", [])[:2]:
-            app = _make_app(gpu_id, "gpu")
-            if app:
+            try:
+                app = make_app(gpu_id, "gpu")
                 face_apps[gpu_id] = app
                 available_gpus.append(gpu_id)
+            except Exception as exc:
+                logger.warning("InsightFace GPU %s init failed: %s", gpu_id, exc)
         if face_apps:
-            globals()['face_app'] = face_apps[available_gpus[0]]
+            face_app = face_apps[available_gpus[0]]
+            logger.info("Face detector ready on GPU(s) %s at %s", available_gpus, selected["det_size"])
             return
-        selected["device"] = "cpu"
-        selected["ctx"] = -1
-        selected["det_size"] = _parse_det_size(os.getenv("FACE_DET_SIZE_CPU"), (640, 640))
-        selected["process_every_n"] = _env_int("FACE_PROCESS_EVERY_N_CPU", 5, 1, 30)
-        runtime_profile.update(selected)
 
-    app = _make_app(selected["ctx"], selected["device"])
-    if app is None:
-        logger.info("Falling back to CPU for InsightFace")
-        runtime_profile.update({
-            "device": "cpu",
-            "ctx": -1,
-            "det_size": _parse_det_size(os.getenv("FACE_DET_SIZE_CPU"), (640, 640)),
-            "process_every_n": _env_int("FACE_PROCESS_EVERY_N_CPU", 5, 1, 30),
-            "providers": selected.get("providers", []),
-        })
-        app = _new_face_analysis("cpu")
-        app.prepare(ctx_id=-1, det_size=runtime_profile["det_size"])
-    globals()['face_app'] = app
-    if runtime_profile["device"] == "gpu":
-        face_apps[runtime_profile["ctx"]] = app
-        available_gpus.append(runtime_profile["ctx"])
+    try:
+        face_app = make_app(selected["ctx"], selected["device"])
+    except Exception:
+        runtime_profile.update({"device": "cpu", "ctx": -1, "det_size": (640, 640), "process_every_n": 5})
+        face_app = _new_face_analysis("cpu")
+        face_app.prepare(ctx_id=-1, det_size=(640, 640))
+    logger.info("Face detector ready: %s", runtime_profile)
 
 
-# ===========================================================================
-#   EMBEDDING MANAGEMENT
-# ===========================================================================
+def get_runtime_profile() -> Dict[str, Any]:
+    return dict(runtime_profile)
+
 
 def clear_company_embeddings_cache(company_id: str) -> None:
     with embedding_lock:
-        company_embeddings.pop(company_id, None)
-        logger.info(f"Cleared embedding cache for company {company_id}")
+        company_embeddings.pop(str(company_id or "default"), None)
 
 
 def load_company_embeddings(company_id: str) -> Dict[str, Any]:
-    global data_directory
+    company_id = str(company_id or "default")
     with embedding_lock:
         cached = company_embeddings.get(company_id)
-        if cached and time.time() - cached["last_loaded"] < 300:
+        if cached and time.time() - cached["loaded_at"] < EMBEDDING_CACHE_SECONDS:
             return cached
     try:
+        from recognition.arcface import get_arcface_engine
+        from recognition.backfill import backfill_arcface_gallery
+        from recognition.vector_store import load_arcface_bank
+        arcface = get_arcface_engine()
+        if arcface.available:
+            arc_bank = load_arcface_bank(company_id)
+            if arc_bank.get("matrix") is None or arc_bank["matrix"].shape[0] == 0:
+                backfill_arcface_gallery(data_directory, company_id)
+                arc_bank = load_arcface_bank(company_id)
+            if arc_bank.get("matrix") is not None and arc_bank["matrix"].shape[0] > 0:
+                entry = {
+                    "matrix": arc_bank["matrix"],
+                    "names": list(arc_bank.get("names") or []),
+                    "person_indices": arc_bank.get("person_indices") or {},
+                    "loaded_at": time.time(),
+                    "model": "arcface-512",
+                }
+                with embedding_lock:
+                    company_embeddings[company_id] = entry
+                return entry
+    except Exception as exc:
+        logger.warning("ArcFace bank unavailable for %s; using dlib fallback: %s", company_id, exc)
+
+    try:
         from fr1 import load_known_faces
-        encs, names = load_known_faces(data_directory, company_id=company_id)
-        entry = {"encodings": encs, "names": names, "last_loaded": time.time()}
+        encodings, names = load_known_faces(data_directory, company_id=company_id)
+        matrix = np.asarray(encodings, dtype=np.float64)
+        if matrix.size == 0:
+            matrix = np.empty((0, 128), dtype=np.float64)
+        elif matrix.ndim == 1:
+            matrix = matrix.reshape(1, -1)
+        person_indices: Dict[str, np.ndarray] = {}
+        if names:
+            names_arr = np.asarray(names, dtype=object)
+            for name in sorted(set(names)):
+                person_indices[name] = np.flatnonzero(names_arr == name)
+        entry = {
+            "matrix": matrix,
+            "names": list(names),
+            "person_indices": person_indices,
+            "loaded_at": time.time(),
+        }
         with embedding_lock:
             company_embeddings[company_id] = entry
         return entry
-    except Exception as e:
-        logger.error(f"Failed to load embeddings for {company_id}: {e}")
-        return {"encodings": [], "names": [], "last_loaded": 0}
+    except Exception as exc:
+        logger.error("Failed loading face templates for %s: %s", company_id, exc)
+        return {"matrix": np.empty((0, 128)), "names": [], "person_indices": {}, "loaded_at": 0.0}
 
 
-def _get_face_app_for_stream(stream_id: Optional[str] = None):
-    if not face_apps:
-        return globals().get('face_app')
-    if stream_id and available_gpus:
-        return face_apps[available_gpus[hash(stream_id) % len(available_gpus)]]
-    return face_apps[available_gpus[0]] if available_gpus else globals().get('face_app')
+def _get_face_app(stream_id: Optional[str]):
+    if face_apps and available_gpus:
+        return face_apps[available_gpus[hash(stream_id or "default") % len(available_gpus)]]
+    return face_app
 
 
-# ===========================================================================
-#   TRACKING HELPERS
-# ===========================================================================
+def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
+    x1, y1 = max(a[0], b[0]), max(a[1], b[1])
+    x2, y2 = min(a[2], b[2]), min(a[3], b[3])
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+    inter = (x2 - x1) * (y2 - y1)
+    area_a = max(1, (a[2] - a[0]) * (a[3] - a[1]))
+    area_b = max(1, (b[2] - b[0]) * (b[3] - b[1]))
+    return inter / float(area_a + area_b - inter)
 
-def _match_detection_to_track(bbox: Tuple, tracks: Dict) -> Optional[int]:
-    best_score, best_id = 0.0, None
-    for tid, info in tracks.items():
-        tb = info.get('bbox')
-        if tb is None:
+
+def _center_distance(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
+    ax, ay = (a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0
+    bx, by = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+    return float(np.hypot(ax - bx, ay - by))
+
+
+def _box_size(box: Tuple[int, int, int, int]) -> Tuple[int, int]:
+    return max(0, box[2] - box[0]), max(0, box[3] - box[1])
+
+
+def _dedupe_boxes(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ordered = sorted(items, key=lambda d: (float(d.get("det_conf") or 0), _box_size(d["bbox"])[0] * _box_size(d["bbox"])[1]), reverse=True)
+    kept = []
+    for item in ordered:
+        if any(_iou(item["bbox"], other["bbox"]) >= 0.55 for other in kept):
             continue
-        iou = _calculate_iou(bbox, tb)
-        overlap = _overlap_ratio(bbox, tb)
-        same_face = _is_same_face_box(bbox, tb)
-        score = max(iou, overlap * 0.9)
-        if same_face and score > best_score:
-            best_score, best_id = score, tid
-    return best_id
+        kept.append(item)
+    return kept
 
 
-def _cleanup_old_tracks(stream_id: str, frame_count: int, now: float):
-    tracks = person_tracking.get(stream_id, {})
-    stale  = [tid for tid, t in tracks.items()
-               if (frame_count - t.get('frame_count', 0)) > MAX_TRACK_AGE_FRAMES
-               or (now - t.get('last_seen', 0)) > MAX_TRACK_AGE_SECONDS]
+def _assign_tracks(stream_id: str, detections: List[Dict[str, Any]], frame_count: int, now: float) -> None:
+    tracks = person_tracking[stream_id]
+    stale = [tid for tid, t in tracks.items() if now - t.get("last_seen", 0) > MAX_TRACK_AGE_SECONDS or frame_count - t.get("frame_count", 0) > MAX_TRACK_AGE_FRAMES]
     for tid in stale:
-        del tracks[tid]
+        tracks.pop(tid, None)
+
+    pairs = []
+    for di, detection in enumerate(detections):
+        box = detection["bbox"]
+        fw, fh = _box_size(box)
+        max_dim = max(fw, fh, 1)
+        for tid, track in tracks.items():
+            tbox = track.get("bbox")
+            if not tbox:
+                continue
+            iou = _iou(box, tbox)
+            center = _center_distance(box, tbox)
+            proximity = max(0.0, 1.0 - center / max(max_dim * 1.5, 1.0))
+            score = iou * 0.72 + proximity * 0.28
+            if iou >= 0.10 or center <= max_dim * 0.65:
+                pairs.append((score, di, tid))
+    assigned_d, assigned_t = set(), set()
+    for score, di, tid in sorted(pairs, reverse=True):
+        if di in assigned_d or tid in assigned_t or score < 0.20:
+            continue
+        detections[di]["track_id"] = tid
+        assigned_d.add(di); assigned_t.add(tid)
+
+    for detection in detections:
+        if "track_id" not in detection:
+            track_id_counter[stream_id] += 1
+            detection["track_id"] = track_id_counter[stream_id]
+        tid = detection["track_id"]
+        track = tracks.get(tid)
+        if track is None:
+            track = {
+                "bbox": detection["bbox"],
+                "last_seen": now,
+                "frame_count": frame_count,
+                "seen_count": 0,
+                "history": deque(maxlen=max(DEFAULT_CONFIRM_WINDOW, 8)),
+                "confirmed_name": None,
+                "confirmed_at": None,
+                "conflict_streak": 0,
+                "last_event_at": 0.0,
+                "last_image_at": 0.0,
+                "last_unknown_at": 0.0,
+                "best_quality": 0.0,
+                "unknown_cluster_id": None,
+            }
+            tracks[tid] = track
+        track["bbox"] = detection["bbox"]
+        track["last_seen"] = now
+        track["frame_count"] = frame_count
+        track["seen_count"] = int(track.get("seen_count", 0)) + 1
+        detection["track"] = track
 
 
-# ===========================================================================
-#   MAIN PROCESS FRAME  (long-distance aware, single-pass for speed)
-# ===========================================================================
+def _quality(crop: np.ndarray, det_conf: float, face_px: int) -> float:
+    if crop is None or crop.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    sharpness = min(float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 450.0, 1.0)
+    mean = float(np.mean(gray))
+    exposure = 1.0 - min(abs(mean - 128.0) / 128.0, 1.0)
+    size_score = min(face_px / 120.0, 1.0)
+    return float(np.clip(sharpness * 0.42 + exposure * 0.18 + size_score * 0.22 + np.clip(det_conf, 0, 1) * 0.18, 0, 1))
 
-def process_frame(frame_bgr: np.ndarray,
-                  force_process: bool = False,
-                  stream_id: Optional[str] = None,
-                  company_id: Optional[str] = None
-                  ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
-    """
-    Detect + recognise faces.  Returns (original_frame, detections).
 
-    Long-distance strategy (fast single-pass)
-    ------------------------------------------
-    1. Apply CLAHE contrast enhancement to the full frame
-    2. Run InsightFace SCRFD once at det_size=(1280,1280) -- this already
-       quadruples effective resolution vs the old (640,640)
-    3. Accept faces down to MIN_FACE_PX (20 px)
-    4. Upscale small crops via Lanczos4 + unsharp mask before encoding
-    5. Encode with dlib large model, consensus vote matching
-    6. Track + persist labels across frames
-    """
-    global person_tracking, track_id_counter
+def _crop(frame: np.ndarray, bbox: Tuple[int, int, int, int], padding: float = 0.12) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = bbox
+    fw, fh = max(1, x2 - x1), max(1, y2 - y1)
+    px, py = int(fw * padding), int(fh * padding)
+    cx1, cy1 = max(0, x1 - px), max(0, y1 - py)
+    cx2, cy2 = min(w, x2 + px), min(h, y2 + py)
+    image = frame[cy1:cy2, cx1:cx2].copy()
+    location = (y1 - cy1, x2 - cx1, y2 - cy1, x1 - cx1)
+    return image, location
 
-    cur_face_app = _get_face_app_for_stream(stream_id)
-    if cur_face_app is None:
-        raise RuntimeError("Face pipeline not initialised. Call init() first.")
-    if frame_bgr is None:
-        return frame_bgr, []
 
-    # -- Per-stream init --------------------------------------------------
+def _encode_variants(frame: np.ndarray, bbox: Tuple[int, int, int, int], min_side: int) -> List[np.ndarray]:
+    if min_side < DEFAULT_RECOGNITION_MIN_PX:
+        return []
+    variants = []
+    paddings = (0.08, 0.20) if min_side < 90 else (0.10,)
+    for padding in paddings:
+        crop, loc = _crop(frame, bbox, padding)
+        if crop.size == 0:
+            continue
+        target = 150 if min_side < 80 else 128
+        top, right, bottom, left = loc
+        face_short = max(1, min(right - left, bottom - top))
+        if face_short < target:
+            scale = min(target / face_short, 3.0)
+            crop = cv2.resize(crop, (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale))), interpolation=cv2.INTER_LANCZOS4)
+            loc = tuple(int(v * scale) for v in loc)
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        try:
+            enc = face_recognition.face_encodings(rgb, known_face_locations=[loc], num_jitters=1, model="large")
+            if enc:
+                variants.append(enc[0].astype(np.float64))
+        except Exception:
+            continue
+    return variants
+
+
+def _thresholds(company_id: str, min_side: int) -> Tuple[float, float, int, int, float, float, int, int]:
+    cfg = _settings(company_id)
+    recognition_min = int(cfg.get("min_recognition_face_px", DEFAULT_RECOGNITION_MIN_PX))
+    attendance_min = int(cfg.get("min_attendance_face_px", DEFAULT_ATTENDANCE_MIN_PX))
+    base = float(cfg.get("known_distance_threshold", DEFAULT_DISTANCE_THRESHOLD))
+    distant = float(cfg.get("distant_distance_threshold", DEFAULT_DISTANT_THRESHOLD))
+    # Smaller faces must pass a LOWER distance (stricter), never a looser one.
+    threshold = distant if min_side < 90 else base
+    margin = float(cfg.get("match_margin", DEFAULT_MATCH_MARGIN))
+    min_quality = float(cfg.get("min_quality", 0.18))
+    attendance_quality = float(cfg.get("min_attendance_quality", 0.24))
+    confirm = max(2, int(cfg.get("confirmation_frames", DEFAULT_CONFIRM_FRAMES)))
+    window = max(confirm, int(cfg.get("confirmation_window", DEFAULT_CONFIRM_WINDOW)))
+    return threshold, margin, recognition_min, attendance_min, min_quality, attendance_quality, confirm, window
+
+
+def _match(embeddings: List[np.ndarray], bank: Dict[str, Any], company_id: str, min_side: int) -> Dict[str, Any]:
+    matrix = bank.get("matrix")
+    names = bank.get("names") or []
+    if not embeddings or matrix is None or len(names) == 0 or matrix.shape[0] == 0:
+        return {"name": None, "distance": None, "confidence": 0.0, "embedding": embeddings[0] if embeddings else None, "margin": 0.0, "hits": 0}
+
+    if matrix.shape[1] == 512:
+        try:
+            from recognition.vector_store import match_arcface_embeddings
+            return match_arcface_embeddings(embeddings, company_id, min_side)
+        except Exception as exc:
+            logger.warning("ArcFace vector search failed for %s: %s", company_id, exc)
+            return {"name": None, "distance": None, "confidence": 0.0, "embedding": embeddings[0], "margin": 0.0, "hits": 0}
+
+    threshold, required_margin, *_ = _thresholds(company_id, min_side)
+    indices = bank.get("person_indices") or {}
+    best_result = None
+    for embedding in embeddings:
+        if matrix.shape[1] != embedding.shape[0]:
+            continue
+        distances = np.linalg.norm(matrix - embedding.reshape(1, -1), axis=1)
+        people = []
+        for person, idx in indices.items():
+            person_distances = np.sort(distances[idx])
+            if person_distances.size == 0:
+                continue
+            minimum = float(person_distances[0])
+            hits = int(np.sum(person_distances <= threshold))
+            top_count = min(2, person_distances.size)
+            score_distance = float(np.mean(person_distances[:top_count]))
+            people.append((score_distance, minimum, person, hits, int(person_distances.size)))
+        if not people:
+            continue
+        people.sort(key=lambda x: (x[0], x[1]))
+        score_distance, minimum, person, hits, template_count = people[0]
+        second_score = people[1][0] if len(people) > 1 else 1.0
+        margin = float(second_score - score_distance)
+
+        required_hits = 2 if template_count >= 3 else 1
+        # A person with only one enrollment template receives an extra strict penalty.
+        effective_threshold = threshold - 0.02 if template_count == 1 else threshold
+        accepted = minimum <= effective_threshold and hits >= required_hits and (len(people) == 1 or margin >= required_margin)
+        result = {
+            "name": person if accepted else None,
+            "distance": minimum,
+            "score_distance": score_distance,
+            "confidence": float(np.clip(1.0 - minimum, 0.0, 1.0)),
+            "embedding": embedding,
+            "margin": margin,
+            "hits": hits,
+            "threshold": effective_threshold,
+        }
+        if accepted and (best_result is None or minimum < best_result["distance"]):
+            best_result = result
+        elif best_result is None:
+            best_result = result
+    return best_result or {"name": None, "distance": None, "confidence": 0.0, "embedding": embeddings[0] if embeddings else None, "margin": 0.0, "hits": 0}
+
+
+def _update_identity(track: Dict[str, Any], match: Dict[str, Any], quality: float, company_id: str, min_side: int) -> None:
+    threshold, margin_req, _, _, min_quality, _, confirm_frames, window = _thresholds(company_id, min_side)
+    history: deque = track["history"]
+    # Resize history if tenant settings changed.
+    if history.maxlen != window:
+        history = deque(list(history)[-window:], maxlen=window)
+        track["history"] = history
+
+    candidate = match.get("name") if quality >= min_quality else None
+    history.append(candidate)
+    confirmed = track.get("confirmed_name")
+
+    if confirmed:
+        if candidate and candidate != confirmed and match.get("distance") is not None and match.get("margin", 0) >= margin_req:
+            track["conflict_streak"] = int(track.get("conflict_streak", 0)) + 1
+        elif candidate == confirmed:
+            track["conflict_streak"] = 0
+        # Revoke a label after two strong contradictory observations. This prevents
+        # a tracker ID swap in a crowd from carrying the previous person's name.
+        if track.get("conflict_streak", 0) >= 2:
+            track["confirmed_name"] = None
+            track["confirmed_at"] = None
+            track["history"].clear()
+            track["history"].append(candidate)
+            track["conflict_streak"] = 0
+        return
+
+    counts = Counter(name for name in history if name)
+    if not counts:
+        return
+    name, count = counts.most_common(1)[0]
+    if count >= confirm_frames:
+        # Competing identities inside the confirmation window make the track ambiguous.
+        competitors = sum(v for k, v in counts.items() if k != name)
+        if competitors <= 1:
+            track["confirmed_name"] = name
+            track["confirmed_at"] = time.time()
+            track["conflict_streak"] = 0
+
+
+def _display_name(person_key: str, company_id: str) -> str:
+    try:
+        from db.repository import get_person
+        person = get_person(company_id, person_key)
+        return (person or {}).get("name") or person_key.replace("_", " ").title()
+    except Exception:
+        return person_key.replace("_", " ").title()
+
+
+def _best_crop(stream_id: Optional[str], track_id: int, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
     if stream_id:
-        person_tracking.setdefault(stream_id, {})
-        track_id_counter.setdefault(stream_id, 0)
-
-    # -- Resolve company / embeddings -------------------------------------
-    if company_id is None and stream_id:
         try:
             from camera_management.streaming import get_stream_manager
-            info = get_stream_manager().get_stream_info(stream_id)
-            if info:
-                company_id = info.get('company_id')
+            manager = get_stream_manager()
+            manager.register_track_frame(stream_id, track_id, frame, bbox)
+            crop = manager.get_best_crop_for_track(stream_id, track_id)
+            if crop is not None and crop.size:
+                return crop
         except Exception:
             pass
-    if not company_id or str(company_id).strip() in ("", "None"):
-        company_id = "default"
+    crop, _ = _crop(frame, bbox, 0.35)
+    return crop
 
-    emb = load_company_embeddings(str(company_id))
-    known_enc   = emb.get("encodings", [])
-    known_names = emb.get("names", [])
 
-    # -- Frame counter / periodic track cleanup ---------------------------
+def process_frame(
+    frame_bgr: np.ndarray,
+    force_process: bool = False,
+    stream_id: Optional[str] = None,
+    company_id: Optional[str] = None,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    detector = _get_face_app(stream_id)
+    if detector is None:
+        raise RuntimeError("Face pipeline not initialized")
+    if frame_bgr is None or frame_bgr.size == 0:
+        return frame_bgr, []
+
+    company_id = str(company_id or "default")
+    bank = load_company_embeddings(company_id)
+    stream_key = str(stream_id or "default")
     now = time.time()
-    _fc_key = f"{stream_id}_fc"
-    if not hasattr(process_frame, '_fc'):
-        process_frame._fc = {}
-    process_frame._fc[_fc_key] = process_frame._fc.get(_fc_key, 0) + 1
-    cur_fc = process_frame._fc[_fc_key]
+    _frame_counters[stream_key] += 1
+    frame_count = _frame_counters[stream_key]
 
-    if stream_id and cur_fc % 10 == 0:
-        with tracking_lock:
-            _cleanup_old_tracks(stream_id, cur_fc, now)
-
-    # --------------------------------------------------------------------
-    #  STEP 1 - Single-pass detection with CLAHE enhancement
-    #  The elevated det_size=(1280,1280) already handles long-distance.
-    # --------------------------------------------------------------------
-    orig_h, orig_w = frame_bgr.shape[:2]
-
-    # Apply CLAHE to boost contrast for outdoor/far cameras
     enhanced = _apply_clahe(frame_bgr)
+    try:
+        faces = detector.get(enhanced)
+    except Exception as exc:
+        logger.error("Face detector failed for %s: %s", stream_key, exc)
+        return frame_bgr, []
 
-    t0 = time.time()
-    faces = cur_face_app.get(enhanced)
-    det_time = time.time() - t0
-
-    if len(faces) > 0:
-        logger.debug(f"[DETECT] {len(faces)} faces | {det_time:.3f}s | stream={stream_id}")
-
-    tracks = person_tracking.get(stream_id, {}) if stream_id else {}
-    detections: List[Dict[str, Any]] = []
-
-    # Pre-collect ALL valid face bboxes for crowd-aware crop clipping.
-    # When saving each face, we pass the full list so that crop padding
-    # is reduced on sides where another face is close.
-    all_face_bboxes: List[Tuple[int, int, int, int]] = []
-    for f in faces:
+    h, w = frame_bgr.shape[:2]
+    raw = []
+    for face in faces:
         try:
-            bx1, by1, bx2, by2 = map(int, f.bbox[:4])
+            x1, y1, x2, y2 = [int(v) for v in face.bbox[:4]]
         except Exception:
-            bbox_raw = getattr(f, 'bbox', None)
-            if bbox_raw is None or len(bbox_raw) < 4:
-                continue
-            bx1, by1, bx2, by2 = int(bbox_raw[0]), int(bbox_raw[1]), int(bbox_raw[2]), int(bbox_raw[3])
-        ax1 = max(0, min(orig_w - 1, bx1))
-        ay1 = max(0, min(orig_h - 1, by1))
-        ax2 = max(0, min(orig_w - 1, bx2))
-        ay2 = max(0, min(orig_h - 1, by2))
-        if (ax2 - ax1) >= MIN_FACE_PX and (ay2 - ay1) >= MIN_FACE_PX:
-            all_face_bboxes.append((ax1, ay1, ax2, ay2))
-
-    for f in faces:
-        # -- Parse bbox ---------------------------------------------------
-        try:
-            bx1, by1, bx2, by2 = map(int, f.bbox[:4])
-        except Exception:
-            bbox_raw = getattr(f, 'bbox', None)
-            if bbox_raw is None or len(bbox_raw) < 4:
-                continue
-            bx1, by1, bx2, by2 = int(bbox_raw[0]), int(bbox_raw[1]), int(bbox_raw[2]), int(bbox_raw[3])
-
-        det_conf = float(getattr(f, 'det_score', 0) or getattr(f, 'score', 0) or 0)
-
-        # Clamp to frame
-        x1 = max(0, min(orig_w - 1, bx1))
-        y1 = max(0, min(orig_h - 1, by1))
-        x2 = max(0, min(orig_w - 1, bx2))
-        y2 = max(0, min(orig_h - 1, by2))
-
+            continue
+        x1, x2 = max(0, min(w - 1, x1)), max(1, min(w, x2))
+        y1, y2 = max(0, min(h - 1, y1)), max(1, min(h, y2))
         fw, fh = x2 - x1, y2 - y1
-
-        # -- Accept faces down to MIN_FACE_PX (long-distance) ------------
-        if fw < MIN_FACE_PX or fh < MIN_FACE_PX:
+        if fw < DETECTION_MIN_FACE_PX or fh < DETECTION_MIN_FACE_PX:
             continue
+        kps = getattr(face, "kps", None)
+        raw.append({
+            "bbox": (x1, y1, x2, y2),
+            "det_conf": float(getattr(face, "det_score", 0.0) or getattr(face, "score", 0.0) or 0.0),
+            "kps": np.asarray(kps, dtype=np.float32).reshape(-1, 2).tolist() if kps is not None else None,
+        })
+    raw = _dedupe_boxes(raw)
 
-        current_bbox = (x1, y1, x2, y2)
+    with tracking_lock:
+        _assign_tracks(stream_key, raw, frame_count, now)
 
-        # -- Crop + upscale for encoding ----------------------------------
-        face_crop_bgr = frame_bgr[y1:y2, x1:x2]
-        if face_crop_bgr.size == 0:
-            continue
-
+    results = []
+    for detection in raw:
+        bbox = detection["bbox"]
+        fw, fh = _box_size(bbox)
         min_side = min(fw, fh)
-        candidate_encodings = (
-            _encode_face_variants(frame_bgr, current_bbox, min_side)
-            if len(known_enc) > 0 else []
-        )
+        face_crop = frame_bgr[bbox[1]:bbox[3], bbox[0]:bbox[2]]
+        quality = _quality(face_crop, detection["det_conf"], min_side)
+        threshold, margin_req, recognition_min, attendance_min, min_quality, attendance_quality, confirm_frames, window = _thresholds(company_id, min_side)
 
-        # -- Encoding -----------------------------------------------------
-        # -- Track matching -----------------------------------------------
-        matched_tid    = None
-        persisted_name = None
-        if stream_id and tracks:
-            with tracking_lock:
-                matched_tid = _match_detection_to_track(current_bbox, tracks)
-                if matched_tid is not None:
-                    persisted_name = tracks[matched_tid].get('name')
+        embeddings = []
+        if min_side >= recognition_min:
+            try:
+                from recognition.arcface import get_arcface_engine
+                arcface = get_arcface_engine()
+                if arcface.available:
+                    arc_embedding = arcface.embed_frame(frame_bgr, bbox, detection.get("kps"))
+                    if arc_embedding is not None:
+                        embeddings = [arc_embedding.astype(np.float64)]
+            except Exception as exc:
+                logger.debug("ArcFace live embedding fallback: %s", exc)
+            if not embeddings:
+                embeddings = _encode_variants(frame_bgr, bbox, min_side)
+        match = _match(embeddings, bank, company_id, min_side)
+        track = detection["track"]
+        with tracking_lock:
+            _update_identity(track, match, quality, company_id, min_side)
+            confirmed = track.get("confirmed_name")
 
-        name = persisted_name if (persisted_name and persisted_name != "Unknown") else "Unknown"
-        conf = 0.0
-        face_encoding = None
+        try:
+            from recognition.liveness import get_liveness_engine
+            liveness = get_liveness_engine().evaluate(track, face_crop)
+        except Exception:
+            liveness = {"score": 0.0, "passed": True, "mode": "unavailable", "required": False}
 
-        # -- Recognition --------------------------------------------------
-        matched_name, matched_conf, matched_encoding, _ = _match_known_face(
-            candidate_encodings,
-            known_enc,
-            known_names,
-            min_side,
-            det_conf,
-        )
-        if matched_name != "Unknown":
-            name = matched_name
-            conf = matched_conf
-            face_encoding = matched_encoding
-        else:
-            conf = det_conf
-
-        # -- Update tracking -----------------------------------------------
+        stream_info = {}
         if stream_id:
-            with tracking_lock:
-                if matched_tid is None:
-                    track_id_counter[stream_id] += 1
-                    matched_tid = track_id_counter[stream_id]
-                    tracks[matched_tid] = {
-                        'name': name, 'bbox': current_bbox,
-                        'last_seen': now, 'frame_count': cur_fc,
-                        'encoding': face_encoding
-                    }
-                else:
-                    t = tracks[matched_tid]
-                    t['bbox']       = current_bbox
-                    t['last_seen']  = now
-                    t['frame_count'] = cur_fc
-                    if t['name'] == "Unknown" and name != "Unknown":
-                        t['name'] = name
-                    if face_encoding is not None:
-                        t['encoding'] = face_encoding
-
-        # -- Save decision (quality-gated) ---------------------------------
-        quality      = _calculate_face_quality(face_crop_bgr, det_conf)
-        person_key   = f"{name}_{matched_tid}" if name != "Unknown" else f"Unknown_{matched_tid}"
-        should_save  = False
-        save_interval = UNKNOWN_MIN_SAVE_INTERVAL if name == "Unknown" else MIN_SAVE_INTERVAL
-        eligible_save = True
-
-        if name == "Unknown" and (
-            min_side < MIN_FACE_PX
-            or det_conf < 0.45
-            or (quality < 0.12 and det_conf < 0.80)
-        ):
-            eligible_save = False
-        elif name != "Unknown" and (
-            min_side < MIN_FACE_PX
-            or (quality < 0.12 and det_conf < 0.55)
-        ):
-            eligible_save = False
-
-        if eligible_save and stream_id:
-            with tracking_lock:
-                rec = best_face_quality[stream_id].get(person_key)
-                if rec is None:
-                    should_save = True
-                    best_face_quality[stream_id][person_key] = {'quality': quality, 'timestamp': now}
-                elif now - rec['timestamp'] > BEST_QUALITY_RESET_SECONDS:
-                    should_save = True
-                    best_face_quality[stream_id][person_key] = {'quality': quality, 'timestamp': now}
-                elif quality > rec['quality'] + 0.08:
-                    should_save = True
-                    best_face_quality[stream_id][person_key] = {'quality': quality, 'timestamp': now}
-        elif eligible_save:
-            should_save = True
-
-        if should_save:
-            # Use padded crop for saving (head + shoulders)
-            best_frame = None
-            if stream_id:
-                try:
-                    from camera_management.streaming import get_stream_manager
-                    best_frame = get_stream_manager().get_best_frame_for_bbox(stream_id, current_bbox)
-                except Exception:
-                    best_frame = None
-
-            save_frame = best_frame if best_frame is not None else frame_bgr
-            # Use larger padding for small/distant faces to capture more context
-            save_padding = 0.4
-            if min_side < 30:
-                save_padding = 0.9
-            elif min_side < 50:
-                save_padding = 0.7
-            elif min_side < 80:
-                save_padding = 0.55
-            # Pass all detected face bboxes for crowd-aware crop clipping
-            padded = _extract_face_crop(
-                save_frame, current_bbox,
-                padding=save_padding,
-                nearby_bboxes=all_face_bboxes if len(all_face_bboxes) > 1 else None,
+            try:
+                from camera_management.streaming import get_stream_manager
+                stream_info = get_stream_manager().get_stream_info(stream_id) or {}
+            except Exception:
+                stream_info = {}
+        try:
+            from tracking.direction import has_virtual_line, update_track_direction
+            event_direction = update_track_direction(track, bbox, frame_bgr.shape, stream_info)
+            crossing_required = bool(
+                str(stream_info.get("camera_role") or "BIDIRECTIONAL").upper() == "BIDIRECTIONAL"
+                and str(stream_info.get("direction") or "AUTO").upper() == "AUTO"
+                and has_virtual_line(stream_info)
             )
-            if padded is None:
-                padded = face_crop_bgr
-            padded_copy = padded.copy()
+        except Exception:
+            event_direction = str(stream_info.get("direction") or "AUTO").upper()
+            crossing_required = False
 
-            camera_name_to_save  = stream_id or "default"
-            company_id_to_save   = None
-            if stream_id:
-                try:
-                    from camera_management.streaming import get_stream_manager
-                    info = get_stream_manager().get_stream_info(stream_id)
-                    if info:
-                        camera_name_to_save = info.get('camera_name', camera_name_to_save)
-                        company_id_to_save  = info.get('company_id')
-                except Exception:
-                    pass
-
-            def _save_async():
-                try:
-                    save_face_image(
-                        face_crop_bgr=padded_copy,
-                        label=name,
-                        confidence=conf,
-                        min_interval=save_interval,
-                        source="stream",
-                        jpeg_quality=98,
-                        target_width=320,
-                        max_upscale=6.0,
-                        camera_name=camera_name_to_save,
-                        company_id=company_id_to_save,
-                        identity_key=person_key,
-                    )
-                except Exception as e:
-                    logger.error(f"Error saving face async: {e}")
-
-            threading.Thread(target=_save_async, daemon=True).start()
-
-        detections.append({
-            "name": name,
-            "conf": conf,
-            "bbox": current_bbox,
-            "face_size_px": (fw, fh),   # useful for debugging distance
+        current_match_is_confirmed = bool(confirmed and match.get("name") == confirmed)
+        attendance_eligible = bool(
+            current_match_is_confirmed
+            and min_side >= attendance_min
+            and quality >= attendance_quality
+            and detection["det_conf"] >= 0.55
+            and bool(liveness.get("passed", True))
+            and event_direction != "NONE"
+            and (not crossing_required or event_direction in {"IN", "OUT"})
+        )
+        results.append({
+            "name": confirmed or "Unknown",
+            "display_name": _display_name(confirmed, company_id) if confirmed else "Unknown",
+            "candidate": match.get("name"),
+            "conf": float(match.get("confidence") or detection["det_conf"]),
+            "distance": match.get("distance"),
+            "margin": float(match.get("margin") or 0.0),
+            "quality": quality,
+            "bbox": bbox,
+            "track_id": detection["track_id"],
+            "track": track,
+            "embedding": match.get("embedding") if match.get("embedding") is not None else (embeddings[0] if embeddings else None),
+            "face_size_px": (fw, fh),
+            "attendance_eligible": attendance_eligible,
+            "current_match_is_confirmed": current_match_is_confirmed,
+            "det_conf": detection["det_conf"],
+            "liveness_score": float(liveness.get("score") or 0.0),
+            "liveness_passed": bool(liveness.get("passed", True)),
+            "liveness_mode": liveness.get("mode"),
+            "event_direction": event_direction,
+            "model_version": match.get("model_version") or ("arcface-512" if embeddings and embeddings[0].shape[0] == 512 else "dlib-128-consensus-v2"),
         })
 
-    # -- Return active tracked persons (persistence for UI) ----------------
-    if stream_id:
-        active = []
-        with tracking_lock:
-            for tid, t in person_tracking.get(stream_id, {}).items():
-                if now - t.get('last_seen', 0) < MAX_TRACK_AGE_SECONDS:
-                    t_bbox = t.get('bbox')
-                    active.append({
-                        "name": t.get('name', 'Unknown'),
-                        "conf": 0.95 if t.get('name') != "Unknown" else 0.5,
-                        "bbox": t_bbox,
-                        "track_id": tid,
-                        "is_persisted": (now - t.get('last_seen', 0)) > 0.1,
-                        "face_size_px": (
-                            t_bbox[2] - t_bbox[0],
-                            t_bbox[3] - t_bbox[1]
-                        ) if t_bbox else (0, 0),
-                    })
-        return frame_bgr, _dedupe_detections(active)
-
-    return frame_bgr, _dedupe_detections(detections)
-
-
-# ===========================================================================
-#   BOUNDING BOX RENDERER
-# ===========================================================================
-
-def render_bounding_boxes(frame: np.ndarray,
-                           detections: List[Dict[str, Any]],
-                           show_bounding_box: bool = True) -> np.ndarray:
-    """
-    Draw bounding boxes.  Purely cosmetic - does not affect detection/saving.
-    Shows face size for unknown faces (useful for verifying long-distance detections).
-    """
-    if not show_bounding_box or not detections:
-        return frame
-
-    detections = _dedupe_detections(detections)
-    show_size = os.getenv("SHOW_FACE_SIZE_LABEL", "0").lower() in ("1", "true", "yes")
-    annotated = frame.copy()
-    h, w      = annotated.shape[:2]
-    font_scale = max(0.5, min(1.0, w / 900.0))
-    thick      = max(2, int(font_scale * 2))
-    box_thick  = max(2, int(font_scale * 2.5))
-
-    for det in detections:
-        name  = det.get("name", "Unknown")
-        bbox  = det.get("bbox")
-        if bbox is None:
+    # One physical identity may appear at most once in one frame. If two distinct
+    # boxes resolve to the same employee, only the strongest observation keeps the
+    # identity; the other remains Unknown until subsequent frames disambiguate it.
+    by_name: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for item in results:
+        if item["name"] != "Unknown":
+            by_name[item["name"]].append(item)
+    for name, items in by_name.items():
+        if len(items) <= 1:
             continue
-        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-        color  = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+        items.sort(key=lambda x: (
+            1 if x["current_match_is_confirmed"] else 0,
+            -(x["distance"] if x["distance"] is not None else 9.0),
+            x["quality"],
+        ), reverse=True)
+        for loser in items[1:]:
+            loser["identity_conflict"] = True
+            loser["name"] = "Unknown"
+            loser["display_name"] = "Unknown"
+            loser["attendance_eligible"] = False
 
-        # -- Box ----------------------------------------------------------
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, box_thick)
+    # Persist DB observations independently from JPEG retention. JPEG is evidence;
+    # recognition_events/attendance_sessions are authoritative history.
+    for item in results:
+        track = item["track"]
+        track_id = item["track_id"]
+        bbox = item["bbox"]
+        if item["name"] != "Unknown" and item["current_match_is_confirmed"]:
+            if now - float(track.get("last_event_at", 0.0)) >= EVENT_INTERVAL_SECONDS:
+                image_path = None
+                should_image = (
+                    track.get("last_image_at", 0.0) == 0.0
+                    or now - float(track.get("last_image_at", 0.0)) >= KNOWN_IMAGE_INTERVAL_SECONDS
+                    or item["quality"] > float(track.get("best_quality", 0.0)) + 0.10
+                )
+                if should_image:
+                    crop = _best_crop(stream_id, track_id, frame_bgr, bbox)
+                    saved = save_face_image(
+                        face_crop_bgr=crop,
+                        label=item["name"],
+                        confidence=item["conf"],
+                        min_interval=0,
+                        source="stream",
+                        camera_name=stream_id,
+                        company_id=company_id,
+                        identity_key=f"{item['name']}:{track_id}",
+                    )
+                    if saved:
+                        image_path = str(saved)
+                        track["last_image_at"] = now
+                        track["best_quality"] = max(float(track.get("best_quality", 0.0)), item["quality"])
+                try:
+                    camera_name = stream_id
+                    if stream_id:
+                        from camera_management.streaming import get_stream_manager
+                        info = get_stream_manager().get_stream_info(stream_id) or {}
+                        camera_name = info.get("camera_name") or stream_id
+                    record_face_event(
+                        company_id=company_id,
+                        label=item["name"],
+                        display_name=item["display_name"],
+                        embedding=item["embedding"],
+                        confidence=item["conf"],
+                        distance=item["distance"],
+                        quality=item["quality"],
+                        face_size=item["face_size_px"],
+                        camera_name=camera_name,
+                        image_path=image_path,
+                        attendance_eligible=item["attendance_eligible"],
+                        direction_override=item.get("event_direction"),
+                        model_version=item.get("model_version"),
+                    )
+                    track["last_event_at"] = now
+                except Exception as exc:
+                    logger.error("Could not persist recognition event: %s", exc)
+        else:
+            # Do not immediately save a known employee as Unknown while the first
+            # confirmation frames are accumulating. Save only stable unknown tracks.
+            known_votes = sum(1 for value in track.get("history", []) if value)
+            stable_unknown = int(track.get("seen_count", 0)) >= 3 and known_votes == 0
+            embedding = item.get("embedding")
+            if stable_unknown and embedding is not None and item["quality"] >= 0.16 and item["det_conf"] >= 0.60:
+                if now - float(track.get("last_unknown_at", 0.0)) >= UNKNOWN_IMAGE_INTERVAL_SECONDS:
+                    try:
+                        from db.repository import cluster_unknown
+                        cfg = _settings(company_id)
+                        cluster_key = track.get("unknown_cluster_id") or cluster_unknown(
+                            company_id,
+                            embedding,
+                            quality=item["quality"],
+                            threshold=float(cfg.get("unknown_cluster_similarity", 0.88)),
+                        )
+                        track["unknown_cluster_id"] = cluster_key
+                        crop = _best_crop(stream_id, track_id, frame_bgr, bbox)
+                        camera_name = stream_id
+                        if stream_id:
+                            from camera_management.streaming import get_stream_manager
+                            info = get_stream_manager().get_stream_info(stream_id) or {}
+                            camera_name = info.get("camera_name") or stream_id
+                        saved = save_face_image(
+                            face_crop_bgr=crop,
+                            label="Unknown",
+                            confidence=item["det_conf"],
+                            min_interval=0,
+                            source="stream",
+                            camera_name=camera_name,
+                            company_id=company_id,
+                            identity_key=f"unknown:{track_id}",
+                            unknown_cluster_id=cluster_key,
+                        )
+                        record_face_event(
+                            company_id=company_id,
+                            label="Unknown",
+                            display_name="Unknown",
+                            embedding=embedding,
+                            confidence=item["det_conf"],
+                            distance=None,
+                            quality=item["quality"],
+                            face_size=item["face_size_px"],
+                            camera_name=camera_name,
+                            image_path=str(saved) if saved else None,
+                            attendance_eligible=False,
+                            unknown_cluster_id=cluster_key,
+                            direction_override=item.get("event_direction"),
+                            model_version=item.get("model_version"),
+                        )
+                        track["last_unknown_at"] = now
+                    except Exception as exc:
+                        logger.error("Could not persist unknown face: %s", exc)
 
-        # -- Label --------------------------------------------------------
-        label = name
-        fx, fy = det.get("face_size_px", (0, 0))
-        if show_size and fx > 0 and fy > 0:
-            if name == "Unknown":
-                label = f"Unknown ({fx}x{fy}px)"
-            else:
-                label = f"{name} ({fx}x{fy}px)"
+    public = []
+    for item in results:
+        public.append({
+            "name": item["display_name"] if item["name"] != "Unknown" else "Unknown",
+            "person_key": item["name"] if item["name"] != "Unknown" else None,
+            "conf": item["conf"],
+            "bbox": item["bbox"],
+            "track_id": item["track_id"],
+            "face_size_px": item["face_size_px"],
+            "quality": item["quality"],
+            "is_confirmed": item["name"] != "Unknown",
+            "is_verifying": item["name"] == "Unknown" and bool(item.get("candidate")),
+            "attendance_eligible": item["attendance_eligible"],
+            "identity_conflict": bool(item.get("identity_conflict")),
+            "liveness_score": item.get("liveness_score"),
+            "liveness_passed": item.get("liveness_passed"),
+            "liveness_mode": item.get("liveness_mode"),
+            "direction": item.get("event_direction"),
+            "model_version": item.get("model_version"),
+        })
+    return frame_bgr, public
 
-        (lw, lh), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thick)
-        ly = max(0, y1 - lh - base - 8)
-        cv2.rectangle(annotated, (x1, ly), (x1 + lw + 8, ly + lh + base + 8), color, cv2.FILLED)
-        cv2.putText(annotated, label, (x1 + 4, ly + lh + 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                    (255, 255, 255), thick, cv2.LINE_AA)
 
-    return annotated
+def render_bounding_boxes(frame: np.ndarray, detections: List[Dict[str, Any]], show_bounding_box: bool = True) -> np.ndarray:
+    if not show_bounding_box or frame is None or not detections:
+        return frame
+    output = frame.copy()
+    for detection in detections:
+        box = detection.get("bbox")
+        if not box:
+            continue
+        x1, y1, x2, y2 = [int(v) for v in box]
+        confirmed = bool(detection.get("is_confirmed"))
+        verifying = bool(detection.get("is_verifying"))
+        if confirmed:
+            color = (35, 160, 85)
+            label = detection.get("name") or "Recognized"
+        elif verifying:
+            color = (0, 155, 220)
+            label = "Verifying"
+        else:
+            color = (70, 95, 220)
+            label = "Unknown"
+        cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
+        font_scale = max(0.45, min(0.75, output.shape[1] / 1400.0))
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+        ty = max(0, y1 - th - 8)
+        cv2.rectangle(output, (x1, ty), (x1 + tw + 10, y1), color, -1)
+        cv2.putText(output, label, (x1 + 5, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+    return output

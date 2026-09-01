@@ -1,382 +1,293 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
+import {
+  ArrowLeft,
+  Camera,
+  CheckCircle2,
+  Clock,
+  Eye,
+  EyeOff,
+  Key,
+  Lock,
+  ScanFace,
+  ShieldCheck,
+  User,
+  Users,
+} from 'lucide-react';
 import useAuthStore from '../../store/authStore';
+import { API_BASE_URL } from '../../utils/apiConfig';
 import './AnimatedLoginPage.css';
-import securityCoinIcon from '../../icon/securitycoin.png';
 
 const AnimatedLoginPage = () => {
+  const { login, error, clearError } = useAuthStore();
+  const [mode, setMode] = useState('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-
-  const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [isExiting, setIsExiting] = useState(false);
-  const [isForgotPassword, setIsForgotPassword] = useState(false);
-  const [forgotUsername, setForgotUsername] = useState('');
-  const [forgotMessage, setForgotMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [inlineError, setInlineError] = useState('');
+  const [notice, setNotice] = useState('');
 
-  const { login, error, clearError, logout, setAuthenticated } = useAuthStore();
+  const [resetUsername, setResetUsername] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
 
-  useEffect(() => {
-    // Initialize animations
-    updateCoinAppearance();
-  }, []);
+  const visibleError = inlineError || error;
 
+  const heading = useMemo(() => {
+    if (mode === 'request') return { title: 'Reset your password', subtitle: 'Request a one-time token for your account.' };
+    if (mode === 'reset') return { title: 'Create a new password', subtitle: 'Enter the one-time token and choose a new password.' };
+    if (mode === 'success') return { title: 'Password updated', subtitle: 'Your active sessions were revoked for security.' };
+    return { title: 'Welcome back', subtitle: 'Sign in to manage attendance, cameras and recognition.' };
+  }, [mode]);
 
-
-  const updateCoinAppearance = () => {
-    const coin = document.getElementById('animatedCoin');
-    if (coin) {
-      coin.className = 'auth-coin';
-    }
+  const resetMessages = () => {
+    setInlineError('');
+    setNotice('');
+    clearError();
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    // Validation (Role is now optional for SuperAdmin/Auto-detection)
-    if (!username.trim() || !password.trim()) {
-      alert('Please enter username and password');
+  const handleLogin = async (event) => {
+    event.preventDefault();
+    resetMessages();
+    if (!username.trim() || !password) {
+      setInlineError('Enter your username and password.');
       return;
     }
 
     setIsLoading(true);
-    clearError();
+    const result = await login(username.trim(), password, null);
+    setIsLoading(false);
+    if (!result.success) {
+      setInlineError(result.error || 'Sign in failed. Check your credentials and try again.');
+    }
+  };
 
-    // Start animation sequence
-    startLoginAnimation();
+  const handleRequestToken = async (event) => {
+    event.preventDefault();
+    resetMessages();
+    const targetUsername = resetUsername.trim() || username.trim();
+    if (!targetUsername) {
+      setInlineError('Enter the username you use to sign in.');
+      return;
+    }
 
-    // Add a minimum delay for the inserting animation
-    const minAnimationTime = new Promise(resolve => setTimeout(resolve, 1500));
-
+    setIsLoading(true);
     try {
-      // Pass null or empty string if no role is selected, the backend will auto-discover
-      const loginPromise = login(username, password, null, true);
-      const [result] = await Promise.all([loginPromise, minAnimationTime]);
-
-      if (result.success) {
-        // Success animation
-        completeLoginAnimation();
-
-        // Wait for success animation before navigating
-        setTimeout(() => {
-          setIsLoading(false);
-          setAuthenticated(true);
-        }, 2000);
-      } else {
-        // Failed animation
-        setTimeout(() => {
-          failedLoginAnimation();
-        }, 1000);
-
-        setTimeout(() => {
-          setIsLoading(false);
-          resetAnimation();
-        }, 3000);
-
-        // Show specific error message from backend
-        if (result.error) {
-          alert(`Authentication failed: ${result.error}`);
-        } else {
-          alert('Authentication failed. Please check your credentials and try again.');
-        }
-      }
-    } catch (error) {
-      // Network/server error
-      setTimeout(() => {
-        failedLoginAnimation();
-      }, 1000);
-
-      setTimeout(() => {
-        setIsLoading(false);
-        resetAnimation();
-      }, 3000);
-
-      alert('Unable to connect to authentication server. Please try again later.');
+      const response = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: targetUsername }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Could not request a reset token.');
+      setResetUsername(targetUsername);
+      if (data.dev_token) setResetToken(data.dev_token);
+      setNotice(data.message || 'If the account exists, a reset token has been sent.');
+      setMode('reset');
+    } catch (requestError) {
+      setInlineError(requestError.message || 'Could not contact the authentication service.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const startLoginAnimation = () => {
-    const coinBank = document.getElementById('coinBank');
-    const animatedCoin = document.getElementById('animatedCoin');
-
-    if (coinBank) {
-      coinBank.classList.add('login-active');
-      coinBank.style.transform = 'translate3d(-50%, -50%, 0) rotateX(0deg) rotateY(0deg) scale(1.1)';
+  const handleResetPassword = async (event) => {
+    event.preventDefault();
+    resetMessages();
+    if (!resetUsername.trim() || !resetToken.trim()) {
+      setInlineError('Username and one-time token are required.');
+      return;
+    }
+    if (newPassword.length < 12) {
+      setInlineError('New password must be at least 12 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setInlineError('The new passwords do not match.');
+      return;
     }
 
-    if (animatedCoin) {
-      animatedCoin.classList.add('inserting');
-    }
-  };
-
-  const completeLoginAnimation = () => {
-    const cubeFaces = document.querySelectorAll('.cube-face');
-    const successMessage = document.getElementById('successMessage');
-    const animatedCoin = document.getElementById('animatedCoin');
-
-    // Add success glow to cube
-    cubeFaces.forEach(face => {
-      face.classList.add('success-glow');
-    });
-
-    // Add success state to coin
-    if (animatedCoin) {
-      animatedCoin.classList.add('success');
-    }
-
-    // Show success message
-    if (successMessage) {
-      successMessage.textContent = '✓ AUTHENTICATION SUCCESSFUL';
-      successMessage.classList.add('show');
-    }
-  };
-
-  const failedLoginAnimation = () => {
-    const animatedCoin = document.getElementById('animatedCoin');
-    const successMessage = document.getElementById('successMessage');
-
-    // Add failed state to coin
-    if (animatedCoin) {
-      animatedCoin.classList.add('failed');
-    }
-
-    // Show failed message
-    if (successMessage) {
-      successMessage.textContent = '✗ AUTHENTICATION FAILED';
-      successMessage.style.background = 'linear-gradient(90deg, var(--error-color), #cc0000)';
-      successMessage.classList.add('show');
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: resetUsername.trim(),
+          token: resetToken.trim(),
+          new_password: newPassword,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Password reset failed.');
+      setPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setResetToken('');
+      setNotice(data.message || 'Password reset successfully.');
+      setMode('success');
+    } catch (resetError) {
+      setInlineError(resetError.message || 'Invalid or expired reset token.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const resetAnimation = () => {
-    const coinBank = document.getElementById('coinBank');
-    const animatedCoin = document.getElementById('animatedCoin');
-    const cubeFaces = document.querySelectorAll('.cube-face');
-    const successMessage = document.getElementById('successMessage');
-
-    if (coinBank) {
-      coinBank.classList.remove('login-active');
-      coinBank.style.transform = '';
-    }
-
-    if (animatedCoin) {
-      animatedCoin.classList.remove('inserting', 'success', 'failed');
-    }
-
-    cubeFaces.forEach(face => {
-      face.classList.remove('success-glow');
-    });
-
-    if (successMessage) {
-      successMessage.classList.remove('show');
-      successMessage.style.background = '';
-    }
+  const goToLogin = () => {
+    resetMessages();
+    setMode('login');
   };
 
-  const togglePassword = () => {
-    setShowPassword(!showPassword);
-  };
+  const renderPasswordButton = (visible, onToggle, label) => (
+    <button type="button" className="auth-visibility" onClick={onToggle} aria-label={label} tabIndex={-1}>
+      {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+    </button>
+  );
 
   return (
-    <div className={`animated-login-container ${isExiting ? 'exiting' : ''}`}>
-      <video className="login-background-video" autoPlay loop muted playsInline>
-        <source src={process.env.PUBLIC_URL + '/assets/login-bg.mov'} type="video/quicktime" />
-        <source src={process.env.PUBLIC_URL + '/assets/login-bg.mov'} type="video/mp4" />
-      </video>
-      <div className="main-container">
-        <div className="glass-wrapper">
-          {/* Left Side - Login Form */}
-          <div className="login-section">
-            <form onSubmit={handleSubmit} id="loginForm" className="login-form">
+    <div className="product-login-page">
+      <div className="login-window">
+        <section className="login-form-pane">
+          <div className="login-brand">
+            <span className="login-brand-mark"><ScanFace size={20} /></span>
+            <div>
+              <strong>Face Recognition</strong>
+              <span>Attendance System</span>
+            </div>
+          </div>
 
+          <div className="login-form-wrap">
+            {mode !== 'login' && mode !== 'success' && (
+              <button type="button" className="auth-back" onClick={goToLogin}><ArrowLeft size={15} /> Back to sign in</button>
+            )}
 
-              <div className="form-group">
-                <label htmlFor="username" className="form-label">USERNAME</label>
-                <div className="input-with-icon">
-                  <input
-                    type="text"
-                    id="username"
-                    name="username"
-                    className="form-input"
-                    placeholder="ENTER USERNAME"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                    disabled={isLoading}
-                  />
-                  <div className="input-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                      <circle cx="12" cy="7" r="4"></circle>
-                    </svg>
-                  </div>
-                </div>
-              </div>
+            <div className="login-heading">
+              <h1>{heading.title}</h1>
+              <p>{heading.subtitle}</p>
+            </div>
 
-              <div className="form-group">
-                <label htmlFor="password" className="form-label">PASSWORD</label>
-                <div className="password-wrapper input-with-icon">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    id="password"
-                    name="password"
-                    className="form-input"
-                    placeholder="ENTER PASSWORD"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    disabled={isLoading}
-                  />
-                  <button
-                    type="button"
-                    className="toggle-password"
-                    onClick={togglePassword}
-                    disabled={isLoading}
-                  >
-                    {showPassword ? (
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                        <line x1="1" y1="1" x2="23" y2="23"></line>
-                      </svg>
-                    ) : (
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                        <circle cx="12" cy="12" r="3"></circle>
-                      </svg>
-                    )}
-                  </button>
-                </div>
-              </div>
+            {visibleError && <div className="auth-inline-message error"><span>!</span>{visibleError}</div>}
+            {notice && <div className="auth-inline-message success"><CheckCircle2 size={16} />{notice}</div>}
 
-              {error && (
-                <div className="error-message">
-                  {error}
-                </div>
-              )}
-
-              <div className="forgot-password-link">
-                <button 
-                  type="button" 
-                  className="link-btn"
-                  onClick={() => {
-                    setIsForgotPassword(true);
-                    setForgotUsername(username);
-                    setForgotMessage('');
-                  }}
-                >
-                  FORGOT PASSWORD?
-                </button>
-              </div>
-
-              <div className="form-group submit-group">
-                <button
-                  type="submit"
-                  className="login-button"
-                  id="loginButton"
-                  disabled={isLoading}
-                >
-                  {isLoading ? 'AUTHENTICATING...' : 'AUTHENTICATE'}
-                </button>
-              </div>
-
-              <div className="form-footer">
-                <p className="login-help-text">SECURE FACE RECOGNITION ACCESS</p>
-              </div>
-            </form>
-
-            {/* Forgot Password Overlay */}
-            {isForgotPassword && (
-              <div className="forgot-password-overlay">
-                <div className="forgot-password-card">
-                  <h3>RESET PASSWORD</h3>
-                  <p>ENTER YOUR USERNAME TO RECEIVE RESET INSTRUCTIONS</p>
-                  <div className="form-group">
+            {mode === 'login' && (
+              <form className="product-login-form" onSubmit={handleLogin}>
+                <label className="auth-field">
+                  <span>Username</span>
+                  <div className="auth-input-wrap">
+                    <User size={16} />
                     <input
-                      type="text"
-                      className="form-input"
-                      placeholder="USERNAME"
-                      value={forgotUsername}
-                      onChange={(e) => setForgotUsername(e.target.value)}
+                      autoFocus
+                      autoComplete="username"
+                      value={username}
+                      onChange={(event) => setUsername(event.target.value)}
+                      placeholder="Enter username"
+                      disabled={isLoading}
                     />
                   </div>
-                  {forgotMessage && <div className="forgot-status">{forgotMessage}</div>}
-                  <div className="modal-actions">
-                    <button 
-                      className="login-button secondary"
-                      onClick={() => setIsForgotPassword(false)}
-                    >
-                      CANCEL
-                    </button>
-                    <button 
-                      className="login-button"
-                      onClick={async () => {
-                        if (!forgotUsername.trim()) {
-                          alert('Please enter your username');
-                          return;
-                        }
-                        try {
-                          const response = await fetch('/api/auth/forgot-password', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: forgotUsername })
-                          });
-                          const data = await response.json();
-                          setForgotMessage(data.message);
-                        } catch (err) {
-                          setForgotMessage('NETWORK ERROR. PLEASE TRY AGAIN.');
-                        }
-                      }}
-                    >
-                      SEND RESET LINK
-                    </button>
+                </label>
+
+                <label className="auth-field">
+                  <span>Password</span>
+                  <div className="auth-input-wrap">
+                    <Lock size={16} />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      placeholder="Enter password"
+                      disabled={isLoading}
+                    />
+                    {renderPasswordButton(showPassword, () => setShowPassword((value) => !value), 'Toggle password visibility')}
                   </div>
+                </label>
+
+                <div className="auth-form-meta">
+                  <span className="role-detection"><ShieldCheck size={14} /> Role detected automatically</span>
+                  <button type="button" className="auth-link" onClick={() => { resetMessages(); setResetUsername(username); setMode('request'); }}>Forgot password?</button>
                 </div>
+
+                <button className="auth-primary-button" type="submit" disabled={isLoading}>
+                  {isLoading ? <><span className="auth-spinner" /> Signing in...</> : 'Sign in'}
+                </button>
+              </form>
+            )}
+
+            {mode === 'request' && (
+              <form className="product-login-form" onSubmit={handleRequestToken}>
+                <label className="auth-field">
+                  <span>Username</span>
+                  <div className="auth-input-wrap">
+                    <User size={16} />
+                    <input autoFocus value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} placeholder="Enter username" />
+                  </div>
+                </label>
+                <div className="reset-note"><Clock size={15} /><span>The token is valid for 15 minutes and can be used once.</span></div>
+                <button className="auth-primary-button" type="submit" disabled={isLoading}>{isLoading ? 'Requesting token...' : 'Request one-time token'}</button>
+              </form>
+            )}
+
+            {mode === 'reset' && (
+              <form className="product-login-form" onSubmit={handleResetPassword}>
+                <label className="auth-field">
+                  <span>Username</span>
+                  <div className="auth-input-wrap"><User size={16} /><input value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} /></div>
+                </label>
+                <label className="auth-field">
+                  <span>One-time token</span>
+                  <div className="auth-input-wrap"><Key size={16} /><input autoFocus value={resetToken} onChange={(event) => setResetToken(event.target.value)} placeholder="Enter token" /></div>
+                </label>
+                <label className="auth-field">
+                  <span>New password</span>
+                  <div className="auth-input-wrap">
+                    <Lock size={16} />
+                    <input type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Minimum 12 characters" />
+                    {renderPasswordButton(showNewPassword, () => setShowNewPassword((value) => !value), 'Toggle new password visibility')}
+                  </div>
+                </label>
+                <label className="auth-field">
+                  <span>Confirm password</span>
+                  <div className="auth-input-wrap"><Lock size={16} /><input type={showNewPassword ? 'text' : 'password'} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat new password" /></div>
+                </label>
+                <button className="auth-primary-button" type="submit" disabled={isLoading}>{isLoading ? 'Updating password...' : 'Reset password'}</button>
+              </form>
+            )}
+
+            {mode === 'success' && (
+              <div className="reset-success-panel">
+                <span className="reset-success-icon"><CheckCircle2 size={27} /></span>
+                <p>Your password is ready. Sign in again using the new credentials.</p>
+                <button className="auth-primary-button" type="button" onClick={goToLogin}>Return to sign in</button>
               </div>
             )}
           </div>
 
-          {/* Right Side - Visual/Animation */}
-          <div className="visual-section">
-            <div className="visual-content">
-              {/* Face Recognition Authentication Coin */}
-              <div className="auth-coin" id="animatedCoin">
-                <div className="coin-face front">
-                  <img src={securityCoinIcon} className="auth-coin-icon-img" alt="Security" />
-                  <div className="coin-text"></div>
-                </div>
-                <div className="coin-face back">
-                  <img src={securityCoinIcon} className="auth-coin-icon-img" alt="Security" />
-                  <div className="coin-text"></div>
-                </div>
-              </div>
+          <div className="login-footer">Secure biometric attendance • Tenant-isolated access</div>
+        </section>
 
-              {/* Professional Authentication Cube */}
-              <div className="scene-container">
-                <div className="face-recognition-cube" id="coinBank">
-                  <div className="cube-face front"></div>
-                  <div className="cube-face back"></div>
-                  <div className="cube-face right"></div>
-                  <div className="cube-face left"></div>
-                  <div className="cube-face top"></div>
-                  <div className="cube-face bottom"></div>
-                </div>
-
-                {/* Authentication Status Message */}
-                <div className="success-message" id="successMessage">
-                  ✓ READY FOR AUTHENTICATION
-                </div>
-              </div>
-
-              <div className="particles">
-                <div className="particle"></div>
-                <div className="particle"></div>
-                <div className="particle"></div>
-                <div className="particle"></div>
-                <div className="particle"></div>
-              </div>
+        <aside className="login-product-pane" aria-label="Product information">
+          <div className="product-visual">
+            <div className="visual-grid" />
+            <div className="face-focus-frame">
+              <span className="focus-corner top-left" /><span className="focus-corner top-right" />
+              <span className="focus-corner bottom-left" /><span className="focus-corner bottom-right" />
+              <div className="face-focus-icon"><ScanFace size={82} strokeWidth={1.05} /></div>
+              <div className="focus-status"><span /> Identity verification ready</div>
             </div>
           </div>
-        </div>
+
+          <div className="product-copy">
+            <h2>Attendance with recognition evidence you can trust.</h2>
+            <p>Designed for multi-camera, multi-tenant attendance with conservative identity decisions and first-in / last-out records.</p>
+            <div className="product-capabilities">
+              <div><Camera size={16} /><span><strong>Multi-camera</strong><small>Entry, exit and reference roles</small></span></div>
+              <div><Users size={16} /><span><strong>Crowd aware</strong><small>Multiple faces tracked independently</small></span></div>
+              <div><ShieldCheck size={16} /><span><strong>Tenant isolated</strong><small>Protected biometric access</small></span></div>
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   );

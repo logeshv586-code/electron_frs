@@ -1,335 +1,292 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Camera, Info, MapPin, ShieldCheck, Trash2 } from 'lucide-react';
 import { useCameras } from './CameraManager';
+import useAuthStore from '../../store/authStore';
 import { extractIPFromStreamURL, validatePrivateIP } from '../../utils/ipValidation';
 import { API_BASE_URL } from '../../utils/apiConfig';
 import './AddCameraForm.css';
 
+const ROLE_OPTIONS = [
+  { value: 'ENTRY', label: 'Entry', description: 'Can set the first attendance IN event.' },
+  { value: 'EXIT', label: 'Exit', description: 'Can update the final attendance OUT event.' },
+  { value: 'BIDIRECTIONAL', label: 'Bidirectional', description: 'Uses tracked virtual-line crossing to decide IN versus OUT.' },
+  { value: 'REFERENCE_ONLY', label: 'Reference only', description: 'Stores recognition evidence but never changes attendance.' },
+];
+
+const roleDirection = (role) => {
+  if (role === 'ENTRY') return 'IN';
+  if (role === 'EXIT') return 'OUT';
+  if (role === 'REFERENCE_ONLY') return 'NONE';
+  return 'AUTO';
+};
+
+const clampCoordinate = (value) => {
+  if (value === '' || value === null || value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(1, Math.max(0, parsed));
+};
+
 const AddCameraForm = ({ collectionId, onClose, editingCamera = null }) => {
-  const { addCamera, updateCamera, removeCamera, collections, activeCollection } = useCameras();
+  const { addCamera, updateCamera, removeCamera, collections = [], activeCollection } = useCameras();
+  const token = useAuthStore((state) => state.token);
+  const currentUser = useAuthStore((state) => state.user);
   const [cameraName, setCameraName] = useState('');
   const [location, setLocation] = useState('');
+  const [siteId, setSiteId] = useState('');
+  const [zoneId, setZoneId] = useState('');
   const [streamUrl, setStreamUrl] = useState('');
-  const [selectedCollection, setSelectedCollection] = useState(null);
-  const [showForm, setShowForm] = useState(true);
+  const [cameraRole, setCameraRole] = useState('BIDIRECTIONAL');
+  const [direction, setDirection] = useState('AUTO');
+  const [lineX1, setLineX1] = useState(0.5);
+  const [lineY1, setLineY1] = useState(0.1);
+  const [lineX2, setLineX2] = useState(0.5);
+  const [lineY2, setLineY2] = useState(0.9);
+  const [inSide, setInSide] = useState('POSITIVE');
+  const [selectedCollection, setSelectedCollection] = useState(collectionId || activeCollection || 'default');
   const [error, setError] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
 
-  // Initialize form with editing camera data if provided
   useEffect(() => {
     if (editingCamera) {
-      setCameraName(editingCamera.name);
+      setCameraName(editingCamera.name || '');
       setLocation(editingCamera.location || '');
-      setStreamUrl(editingCamera.streamUrl);
+      setSiteId(editingCamera.site_id || '');
+      setZoneId(editingCamera.zone_id || '');
+      setStreamUrl(editingCamera.streamUrl || editingCamera.rtsp_url || '');
+      setCameraRole(editingCamera.camera_role || 'BIDIRECTIONAL');
+      setDirection(editingCamera.direction || roleDirection(editingCamera.camera_role || 'BIDIRECTIONAL'));
+      setLineX1(editingCamera.line_x1 ?? 0.5);
+      setLineY1(editingCamera.line_y1 ?? 0.1);
+      setLineX2(editingCamera.line_x2 ?? 0.5);
+      setLineY2(editingCamera.line_y2 ?? 0.9);
+      setInSide(editingCamera.in_side || 'POSITIVE');
+      setSelectedCollection(editingCamera.collection_id || collectionId || activeCollection || 'default');
     } else {
       setCameraName('');
       setLocation('');
+      setSiteId('');
+      setZoneId('');
       setStreamUrl('');
+      setCameraRole('BIDIRECTIONAL');
+      setDirection('AUTO');
+      setLineX1(0.5);
+      setLineY1(0.1);
+      setLineX2(0.5);
+      setLineY2(0.9);
+      setInSide('POSITIVE');
+      setSelectedCollection(collectionId || activeCollection || 'default');
     }
-  }, [editingCamera]);
+    setError('');
+    setValidationResult(null);
+  }, [editingCamera, collectionId, activeCollection]);
 
-  // Show form when there's an active collection
-  useEffect(() => {
-    if (activeCollection) {
-      setShowForm(true);
-      setSelectedCollection(activeCollection);
-    }
-  }, [activeCollection]);
+  const handleRoleChange = (value) => {
+    setCameraRole(value);
+    setDirection(roleDirection(value));
+  };
 
-  // Set selected collection based on collectionId prop
-  useEffect(() => {
-    if (collectionId) {
-      setSelectedCollection(collectionId);
-    }
-  }, [collectionId]);
-
-  // Validate camera data with backend
-  const validateCameraData = async (ip, streamUrl, collectionName = null, excludeIp = null) => {
+  const validateCameraData = async (ip, url, collectionName, excludeIp) => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/collections/validate-camera`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          ip,
-          streamUrl,
-          collection_name: collectionName,
-          exclude_ip: excludeIp
-        }),
+        body: JSON.stringify({ ip, streamUrl: url, collection_name: collectionName, exclude_ip: excludeIp }),
       });
-
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) return { valid: false, error: result.detail || 'Camera validation failed.' };
       return result;
-    } catch (error) {
-      console.error('Validation error:', error);
-      return {
-        valid: false,
-        error: 'Failed to validate camera data. Please try again.',
-        type: 'network_error'
-      };
+    } catch (requestError) {
+      return { valid: false, error: 'Could not validate the camera. Check the backend connection.', type: 'network_error' };
     }
   };
 
   const validateForm = async () => {
     if (!cameraName.trim()) {
-      setError('Please enter a camera name');
+      setError('Camera name is required.');
       return false;
     }
-
     if (!streamUrl.trim()) {
-      setError('Please enter a stream URL');
+      setError('Stream URL or local camera index is required.');
       return false;
     }
 
     const trimmedUrl = streamUrl.trim();
-
-    // Allow local camera indices (0, 1, 2, etc.) for testing
     const isCameraIndex = /^\d+$/.test(trimmedUrl);
-    
-    if (!isCameraIndex && !trimmedUrl.startsWith('rtsp://') && !trimmedUrl.startsWith('http://')) {
-      setError('Stream URL must start with rtsp://, http://, or be a camera index (0, 1, 2...)');
+    if (!isCameraIndex && !trimmedUrl.toLowerCase().startsWith('rtsp://') && !trimmedUrl.toLowerCase().startsWith('http://') && !trimmedUrl.toLowerCase().startsWith('https://')) {
+      setError('Use an RTSP/HTTP/HTTPS stream URL or a local camera index such as 0.');
       return false;
     }
 
-    let extractedIP = null;
+    if (cameraRole === 'BIDIRECTIONAL' && direction === 'AUTO') {
+      const coordinates = [lineX1, lineY1, lineX2, lineY2].map(Number);
+      if (coordinates.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+        setError('Virtual-line coordinates must be between 0 and 1.');
+        return false;
+      }
+      if (Number(lineX1) === Number(lineX2) && Number(lineY1) === Number(lineY2)) {
+        setError('Virtual line must have two different points.');
+        return false;
+      }
+    }
 
-    // Skip IP validation for local camera indices
+    let extractedIP = trimmedUrl;
     if (!isCameraIndex) {
-      // Extract IP address from stream URL for validation
       extractedIP = extractIPFromStreamURL(trimmedUrl);
       if (!extractedIP) {
-        setError('Could not extract IP address from stream URL. Please ensure the URL contains a valid IP address.');
+        setError('The stream URL must contain a valid camera IP address.');
         return false;
       }
-
-      // Basic client-side IP validation
       const ipValidation = validatePrivateIP(extractedIP);
       if (!ipValidation.isValid) {
-        setError(`Camera IP address (${extractedIP}) must be within private network ranges:\n• 192.168.0.0 – 192.168.255.255 (most common)\n• 10.0.0.0 – 10.255.255.255\n• 172.16.0.0 – 172.31.255.255`);
+        setError('Camera IP must be inside an approved private network range.');
         return false;
       }
-    } else {
-      // For camera indices, use the index as the IP for backend validation
-      extractedIP = trimmedUrl;
     }
 
-    // Backend validation including duplicate checking
     setIsValidating(true);
-    const targetCollectionId = collectionId || selectedCollection || activeCollection;
-    const targetCollection = collections.find(c => c.id === targetCollectionId);
-    const collectionName = targetCollection?.name;
-
-    const excludeIp = editingCamera ? extractIPFromStreamURL(editingCamera.streamUrl) || editingCamera.streamUrl : null;
-
-    const validation = await validateCameraData(
-      extractedIP,
-      streamUrl.trim(),
-      collectionName,
-      excludeIp
-    );
-
+    const targetCollection = collections.find((item) => item.id === selectedCollection);
+    const oldUrl = editingCamera?.streamUrl || editingCamera?.rtsp_url || '';
+    const excludeIp = editingCamera ? (extractIPFromStreamURL(oldUrl) || oldUrl) : null;
+    const validation = await validateCameraData(extractedIP, trimmedUrl, targetCollection?.name, excludeIp);
     setIsValidating(false);
     setValidationResult(validation);
-
     if (!validation.valid) {
-      if (validation.type === 'duplicate') {
-        setError(`${validation.error}\n\nExisting camera found in collection: ${validation.existingCollection}`);
-      } else {
-        setError(validation.error);
-      }
+      setError(validation.type === 'duplicate' && validation.existingCollection
+        ? `${validation.error} Existing collection: ${validation.existingCollection}.`
+        : (validation.error || 'Camera validation failed.'));
       return false;
     }
-
     return true;
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setError('');
+    setValidationResult(null);
+    if (!(await validateForm())) return;
 
-    const isValid = await validateForm();
-    if (!isValid) return;
+    const useVirtualLine = cameraRole === 'BIDIRECTIONAL' && direction === 'AUTO';
+    const attendanceFields = {
+      site_id: siteId.trim() || null,
+      zone_id: zoneId.trim() || null,
+      camera_role: cameraRole,
+      direction,
+      line_x1: useVirtualLine ? clampCoordinate(lineX1) : null,
+      line_y1: useVirtualLine ? clampCoordinate(lineY1) : null,
+      line_x2: useVirtualLine ? clampCoordinate(lineX2) : null,
+      line_y2: useVirtualLine ? clampCoordinate(lineY2) : null,
+      in_side: useVirtualLine ? inSide : 'POSITIVE',
+    };
 
     try {
-      const targetCollectionId = collectionId || selectedCollection || activeCollection;
-
       if (editingCamera) {
-        // Update existing camera
         await updateCamera(editingCamera.id, {
           name: cameraName.trim(),
           location: location.trim(),
           streamUrl: streamUrl.trim(),
-          collectionId: targetCollectionId
+          collectionId: selectedCollection,
+          ...attendanceFields,
         });
       } else {
-        // Add new camera
-        addCamera(cameraName.trim(), streamUrl.trim(), targetCollectionId, location.trim());
+        const created = await addCamera(cameraName.trim(), streamUrl.trim(), selectedCollection, location.trim());
+        if (created?.camera?.id) {
+          await updateCamera(created.camera.id, attendanceFields);
+        }
       }
-
-      // Reset form
-      setCameraName('');
-      setLocation('');
-      setStreamUrl('');
-      setError('');
-      setValidationResult(null);
-
-      // Close form if onClose is provided
-      if (onClose) {
-        onClose();
-      }
-    } catch (err) {
-      console.error('Error submitting camera:', err);
-
-      // Handle enhanced error messages from the camera store
-      let errorMessage = `Failed to ${editingCamera ? 'update' : 'add'} camera.`;
-
-      if (err.message) {
-        errorMessage = err.message;
-      }
-
-      // Add additional context for specific error types
-      if (err.type === 'duplicate') {
-        errorMessage += '\n\nPlease choose a different IP address or stream URL.';
-      } else if (err.type === 'validation') {
-        errorMessage += '\n\nPlease check your input and try again.';
-      } else if (err.statusCode === 409) {
-        errorMessage += '\n\nThis camera configuration conflicts with an existing camera.';
-      }
-
-      setError(errorMessage);
+      if (onClose) onClose();
+    } catch (submitError) {
+      setError(submitError.message || `Failed to ${editingCamera ? 'update' : 'add'} camera.`);
     }
   };
 
-  const handleDelete = () => {
-    if (!editingCamera) return;
-
+  const handleDelete = async () => {
+    if (!editingCamera || currentUser?.role !== 'SuperAdmin') return;
     try {
-      removeCamera(editingCamera.id);
+      await removeCamera(editingCamera.id);
       setShowDeleteConfirm(false);
-      if (onClose) {
-        onClose();
-      }
-    } catch (err) {
-      setError('Failed to delete camera. Please try again.');
+      if (onClose) onClose();
+    } catch (deleteError) {
+      setError(deleteError.message || 'Failed to delete camera.');
     }
   };
 
-  const handleCancel = () => {
-    setCameraName('');
-    setLocation('');
-    setStreamUrl('');
-    setError('');
-    setShowDeleteConfirm(false);
-    if (onClose) {
-      onClose();
-    }
-  };
-
-  if (!showForm) return null;
+  const roleDescription = ROLE_OPTIONS.find((item) => item.value === cameraRole)?.description;
+  const showVirtualLine = cameraRole === 'BIDIRECTIONAL' && direction === 'AUTO';
 
   return (
-    <div className="add-camera-form">
+    <div className="add-camera-form product-camera-form">
       <div className="form-header">
-        <h3>{editingCamera ? 'Edit Camera' : 'Add New Camera'}</h3>
+        <div className="camera-form-title"><span><Camera size={18} /></span><div><h3>{editingCamera ? 'Edit camera' : 'Add camera'}</h3><p>Configure the stream and how this camera participates in attendance.</p></div></div>
       </div>
+
       <form onSubmit={handleSubmit}>
-        {error && <div className="error-message">{error}</div>}
-        <div className="form-group">
-          <label htmlFor="camera-name">Camera Name</label>
-          <input
-            id="camera-name"
-            type="text"
-            value={cameraName}
-            onChange={(e) => setCameraName(e.target.value)}
-            placeholder="Enter camera name"
-            required
-          />
-        </div>
-        <div className="form-group">
-          <label htmlFor="location">Location</label>
-          <input
-            id="location"
-            type="text"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="Enter camera location (e.g. Front Door, Parking Lot)"
-          />
-        </div>
-        <div className="form-group">
-          <label htmlFor="stream-url">Stream URL (RTSP/HTTP/Camera Index)</label>
-          <input
-            id="stream-url"
-            type="text"
-            value={streamUrl}
-            onChange={(e) => setStreamUrl(e.target.value)}
-            placeholder="e.g. rtsp://admin:password@192.168.1.100:554/stream or 0 (for webcam)"
-            required
-          />
-        </div>
-        {/* Validation Status */}
-        {isValidating && (
-          <div className="validation-status">
-            <span>Validating camera data...</span>
-          </div>
-        )}
+        {error && <div className="error-message camera-form-error">{error}</div>}
 
-        {validationResult && validationResult.valid && (
-          <div className="validation-success">
-            ✓ Camera data is valid and ready to be added
-          </div>
-        )}
+        <div className="camera-form-grid two-column">
+          <label className="form-group"><span>Camera name</span><input value={cameraName} onChange={(event) => setCameraName(event.target.value)} placeholder="Main Gate Camera 01" required /></label>
+          <label className="form-group"><span>Collection</span><select value={selectedCollection || 'default'} onChange={(event) => setSelectedCollection(event.target.value)}>{collections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}</option>)}{collections.length === 0 && <option value="default">Default Collection</option>}</select></label>
+        </div>
 
-        <div className="form-actions">
-          <button
-            type="submit"
-            className="primary-button"
-            disabled={isValidating}
-          >
-            {isValidating ? 'Validating...' : (editingCamera ? 'Update Camera' : 'Add Camera')}
-          </button>
-          {editingCamera && (
-            <button
-              type="button"
-              className="delete-button"
-              onClick={() => setShowDeleteConfirm(true)}
-              disabled={isValidating}
-            >
-              Delete Camera
+        <label className="form-group"><span>Stream URL / camera index</span><input value={streamUrl} onChange={(event) => setStreamUrl(event.target.value)} placeholder="rtsp://user:password@192.168.1.100:554/stream or 0" required /></label>
+
+        <div className="camera-form-section-title"><MapPin size={14} /> Location identity</div>
+        <div className="camera-form-grid three-column">
+          <label className="form-group"><span>Display location</span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Main Entrance" /></label>
+          <label className="form-group"><span>Site ID</span><input value={siteId} onChange={(event) => setSiteId(event.target.value)} placeholder="chennai-office" /></label>
+          <label className="form-group"><span>Zone ID</span><input value={zoneId} onChange={(event) => setZoneId(event.target.value)} placeholder="ground-floor-gate" /></label>
+        </div>
+
+        <div className="camera-form-section-title"><ShieldCheck size={14} /> Attendance behavior</div>
+        <div className="camera-role-grid">
+          {ROLE_OPTIONS.map((option) => (
+            <button type="button" key={option.value} className={`camera-role-option ${cameraRole === option.value ? 'active' : ''}`} onClick={() => handleRoleChange(option.value)}>
+              <span className="camera-role-radio" />
+              <span><strong>{option.label}</strong><small>{option.description}</small></span>
             </button>
-          )}
-          <button
-            type="button"
-            className="cancel-button"
-            onClick={handleCancel}
-            disabled={isValidating}
-          >
-            Cancel
-          </button>
+          ))}
+        </div>
+
+        <div className="direction-summary">
+          <Info size={14} />
+          <span><strong>Direction: {direction}</strong> — {roleDescription}</span>
+        </div>
+
+        {showVirtualLine && (
+          <div className="virtual-line-panel">
+            <div className="camera-form-section-title">Virtual crossing line</div>
+            <p className="field-help">Coordinates are normalized to the camera frame: 0 is top/left and 1 is bottom/right. The default creates a vertical center line.</p>
+            <div className="camera-form-grid three-column">
+              <label className="form-group"><span>Start X</span><input type="number" min="0" max="1" step="0.01" value={lineX1} onChange={(e) => setLineX1(e.target.value)} /></label>
+              <label className="form-group"><span>Start Y</span><input type="number" min="0" max="1" step="0.01" value={lineY1} onChange={(e) => setLineY1(e.target.value)} /></label>
+              <label className="form-group"><span>IN side</span><select value={inSide} onChange={(e) => setInSide(e.target.value)}><option value="POSITIVE">Positive side</option><option value="NEGATIVE">Negative side</option></select></label>
+              <label className="form-group"><span>End X</span><input type="number" min="0" max="1" step="0.01" value={lineX2} onChange={(e) => setLineX2(e.target.value)} /></label>
+              <label className="form-group"><span>End Y</span><input type="number" min="0" max="1" step="0.01" value={lineY2} onChange={(e) => setLineY2(e.target.value)} /></label>
+            </div>
+          </div>
+        )}
+
+        {isValidating && <div className="validation-status">Validating stream and tenant configuration...</div>}
+        {validationResult?.valid && <div className="validation-success">Camera configuration validated.</div>}
+
+        <div className="form-actions camera-form-actions">
+          <button type="submit" className="primary-button" disabled={isValidating}>{isValidating ? 'Validating...' : (editingCamera ? 'Save changes' : 'Add camera')}</button>
+          <button type="button" className="cancel-button" onClick={onClose} disabled={isValidating}>Cancel</button>
+          {editingCamera && currentUser?.role === 'SuperAdmin' && <button type="button" className="delete-button" onClick={() => setShowDeleteConfirm(true)} disabled={isValidating}><Trash2 size={14} /> Delete</button>}
         </div>
       </form>
 
-      {/* Delete Confirmation Modal */}
-      {showDeleteConfirm && (
+      {showDeleteConfirm && currentUser?.role === 'SuperAdmin' && (
         <div className="modal-overlay">
-          <div className="modal-content">
-            <h3>Delete Camera</h3>
-            <p>Are you sure you want to delete this camera?</p>
-            <div className="modal-actions">
-              <button
-                className="confirm-button"
-                onClick={handleDelete}
-              >
-                Delete
-              </button>
-              <button
-                className="cancel-button"
-                onClick={() => setShowDeleteConfirm(false)}
-              >
-                Cancel
-              </button>
-            </div>
+          <div className="modal-content delete-camera-modal">
+            <h3>Delete camera?</h3>
+            <p>This removes the camera configuration. Historical recognition and attendance records remain in the database.</p>
+            <div className="modal-actions"><button className="confirm-button danger" onClick={handleDelete}>Delete camera</button><button className="cancel-button" onClick={() => setShowDeleteConfirm(false)}>Keep camera</button></div>
           </div>
         </div>
       )}

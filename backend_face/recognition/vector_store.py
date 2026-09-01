@@ -240,10 +240,10 @@ def search_arcface(company_id: str, embedding: Sequence[float], top_k: int = 25)
 def match_arcface_embeddings(embeddings: Sequence[np.ndarray], company_id: str, min_side: int) -> Dict[str, object]:
     if not embeddings:
         return {"name": None, "distance": None, "confidence": 0.0, "embedding": None, "margin": 0.0, "hits": 0}
-    base_threshold = float(os.getenv("FRS_ARCFACE_COSINE_THRESHOLD", "0.55"))
-    distant_threshold = float(os.getenv("FRS_ARCFACE_DISTANT_COSINE_THRESHOLD", "0.60"))
+    base_threshold = float(os.getenv("FRS_ARCFACE_COSINE_THRESHOLD", "0.62"))
+    distant_threshold = float(os.getenv("FRS_ARCFACE_DISTANT_COSINE_THRESHOLD", "0.68"))
     threshold = distant_threshold if int(min_side) < 90 else base_threshold
-    required_margin = float(os.getenv("FRS_ARCFACE_MARGIN", "0.08"))
+    required_margin = float(os.getenv("FRS_ARCFACE_MARGIN", "0.10"))
     best_result: Optional[Dict[str, object]] = None
 
     for embedding in embeddings:
@@ -254,14 +254,22 @@ def match_arcface_embeddings(embeddings: Sequence[np.ndarray], company_id: str, 
         if not per_person:
             continue
         ranked = sorted(
-            ((max(values), float(np.mean(sorted(values, reverse=True)[:2])), person, len(values))
+            ((max(values), float(np.mean(sorted(values, reverse=True)[:2])), person,
+              int(sum(value >= threshold for value in values)), len(values))
              for person, values in per_person.items()),
             reverse=True,
         )
-        best_similarity, score_similarity, person, hits = ranked[0]
+        best_similarity, score_similarity, person, hits, template_count = ranked[0]
         second_similarity = ranked[1][1] if len(ranked) > 1 else 0.0
         margin = float(score_similarity - second_similarity)
-        accepted = best_similarity >= threshold and (len(ranked) == 1 or margin >= required_margin)
+        required_hits = 1 if template_count == 1 else 2
+        effective_threshold = threshold + (0.04 if template_count == 1 else 0.0)
+        accepted = bool(
+            best_similarity >= effective_threshold
+            and score_similarity >= effective_threshold - 0.02
+            and hits >= required_hits
+            and (len(ranked) == 1 or margin >= required_margin)
+        )
         result = {
             "name": person if accepted else None,
             "distance": float(1.0 - best_similarity),
@@ -270,7 +278,7 @@ def match_arcface_embeddings(embeddings: Sequence[np.ndarray], company_id: str, 
             "embedding": np.asarray(embedding, dtype=np.float32),
             "margin": margin,
             "hits": int(hits),
-            "threshold": threshold,
+            "threshold": effective_threshold,
             "model_version": "arcface-512-pgvector" if is_postgres() else "arcface-512-local",
         }
         if accepted and (best_result is None or result["confidence"] > best_result["confidence"]):

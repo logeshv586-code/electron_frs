@@ -218,10 +218,15 @@ class CameraStreamManager:
         crop = frame[y1:y2, x1:x2].copy()
         if crop.size == 0 or min(crop.shape[:2]) < 10:
             return
+        try:
+            from recognition.evidence_quality import evidence_score
+            best_score = evidence_score(crop, tuple(bbox))
+        except Exception:
+            best_score = self._focus_score(crop)
         item = {
             "crop": crop,
             "bbox": tuple(bbox),
-            "score": self._focus_score(crop),
+            "score": best_score,
             "timestamp": time.time(),
         }
         with self.crop_lock:

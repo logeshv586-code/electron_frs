@@ -37,8 +37,8 @@ GALLERY_DIR.mkdir(parents=True, exist_ok=True)
 FACE_WIDTH = 224
 FACE_HEIGHT = 224
 MAX_TEMPLATES_PER_PERSON = max(6, int(os.getenv("FRS_MAX_FACE_TEMPLATES", "12")))
-DUPLICATE_DISTANCE = float(os.getenv("FRS_DUPLICATE_FACE_DISTANCE", "0.40"))
-MIN_ENROLL_FACE_PX = int(os.getenv("FRS_MIN_ENROLL_FACE_PX", "100"))
+DUPLICATE_DISTANCE = float(os.getenv("FRS_DUPLICATE_FACE_DISTANCE", "0.44"))
+MIN_ENROLL_FACE_PX = int(os.getenv("FRS_MIN_ENROLL_FACE_PX", "120"))
 
 app = FastAPI(title="FRS Registration")
 
@@ -153,14 +153,10 @@ def _augmentation_candidates(face: np.ndarray) -> List[Tuple[str, np.ndarray]]:
     """
     candidates: List[Tuple[str, np.ndarray]] = [
         ("original", face),
-        ("rot_m8", _rotate(face, -8)),
         ("rot_m4", _rotate(face, -4)),
         ("rot_p4", _rotate(face, 4)),
-        ("rot_p8", _rotate(face, 8)),
-        ("dim", _adjust(face, 0.86, -4)),
-        ("bright", _adjust(face, 1.12, 5)),
-        ("contrast_low", _adjust(face, 0.92, 8)),
-        ("contrast_high", _adjust(face, 1.10, -6)),
+        ("dim", _adjust(face, 0.90, -2)),
+        ("bright", _adjust(face, 1.08, 3)),
         ("clahe", _clahe(face)),
     ]
     return candidates
@@ -179,8 +175,10 @@ def _build_templates(real_faces: Sequence[np.ndarray]) -> List[Tuple[str, np.nda
                 nearest = min(float(np.linalg.norm(embedding - other)) for other in seen_embeddings)
                 if nearest < 0.008 and aug_name != "original":
                     continue
-            seen_embeddings.append(embedding)
             quality = _face_quality(variant)
+            if quality < 0.28 and aug_name != "original":
+                continue
+            seen_embeddings.append(embedding)
             prepared.append((f"real{real_index:02d}_{aug_name}", variant, embedding, quality))
             if len(prepared) >= MAX_TEMPLATES_PER_PERSON:
                 return prepared
@@ -256,7 +254,10 @@ def _register_person(
     if not images:
         raise ValueError("At least one enrollment image is required")
     faces = [_detect_standardized_face(image) for image in images]
-    base_embedding = encode_face_image(faces[0], num_jitters=3)
+    face_qualities = [_face_quality(face) for face in faces]
+    if max(face_qualities or [0.0]) < 0.34:
+        raise ValueError("Enrollment face quality is too low. Use a sharper, better-lit and closer image.")
+    base_embedding = encode_face_image(faces[int(np.argmax(face_qualities))], num_jitters=3)
     if base_embedding is None:
         raise ValueError("Could not create a face embedding from the enrollment image")
 

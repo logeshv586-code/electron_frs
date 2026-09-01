@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 
 # Detection remains aggressive; recognition/attendance are intentionally stricter.
 DETECTION_MIN_FACE_PX = int(os.getenv("FACE_DETECTION_MIN_PX", "20"))
-DEFAULT_RECOGNITION_MIN_PX = int(os.getenv("FACE_RECOGNITION_MIN_PX", "56"))
-DEFAULT_ATTENDANCE_MIN_PX = int(os.getenv("FACE_ATTENDANCE_MIN_PX", "72"))
-DEFAULT_DISTANCE_THRESHOLD = float(os.getenv("FACE_MATCH_DISTANCE", "0.46"))
-DEFAULT_DISTANT_THRESHOLD = float(os.getenv("FACE_DISTANT_MATCH_DISTANCE", "0.42"))
-DEFAULT_MATCH_MARGIN = float(os.getenv("FACE_MATCH_MARGIN", "0.04"))
-DEFAULT_CONFIRM_FRAMES = int(os.getenv("FACE_CONFIRM_FRAMES", "3"))
-DEFAULT_CONFIRM_WINDOW = int(os.getenv("FACE_CONFIRM_WINDOW", "5"))
+DEFAULT_RECOGNITION_MIN_PX = int(os.getenv("FACE_RECOGNITION_MIN_PX", "64"))
+DEFAULT_ATTENDANCE_MIN_PX = int(os.getenv("FACE_ATTENDANCE_MIN_PX", "88"))
+DEFAULT_DISTANCE_THRESHOLD = float(os.getenv("FACE_MATCH_DISTANCE", "0.42"))
+DEFAULT_DISTANT_THRESHOLD = float(os.getenv("FACE_DISTANT_MATCH_DISTANCE", "0.37"))
+DEFAULT_MATCH_MARGIN = float(os.getenv("FACE_MATCH_MARGIN", "0.07"))
+DEFAULT_CONFIRM_FRAMES = int(os.getenv("FACE_CONFIRM_FRAMES", "4"))
+DEFAULT_CONFIRM_WINDOW = int(os.getenv("FACE_CONFIRM_WINDOW", "6"))
 MAX_TRACK_AGE_SECONDS = float(os.getenv("FACE_TRACK_MAX_AGE_SECONDS", "1.25"))
 MAX_TRACK_AGE_FRAMES = int(os.getenv("FACE_TRACK_MAX_AGE_FRAMES", "30"))
 EVENT_INTERVAL_SECONDS = float(os.getenv("FACE_EVENT_INTERVAL_SECONDS", "5"))
@@ -275,13 +275,8 @@ def _box_size(box: Tuple[int, int, int, int]) -> Tuple[int, int]:
 
 
 def _dedupe_boxes(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    ordered = sorted(items, key=lambda d: (float(d.get("det_conf") or 0), _box_size(d["bbox"])[0] * _box_size(d["bbox"])[1]), reverse=True)
-    kept = []
-    for item in ordered:
-        if any(_iou(item["bbox"], other["bbox"]) >= 0.55 for other in kept):
-            continue
-        kept.append(item)
-    return kept
+    from recognition.detection_guard import dedupe_face_detections
+    return dedupe_face_detections(items)
 
 
 def _assign_tracks(stream_id: str, detections: List[Dict[str, Any]], frame_count: int, now: float) -> None:
@@ -397,13 +392,16 @@ def _thresholds(company_id: str, min_side: int) -> Tuple[float, float, int, int,
     attendance_min = int(cfg.get("min_attendance_face_px", DEFAULT_ATTENDANCE_MIN_PX))
     base = float(cfg.get("known_distance_threshold", DEFAULT_DISTANCE_THRESHOLD))
     distant = float(cfg.get("distant_distance_threshold", DEFAULT_DISTANT_THRESHOLD))
-    # Smaller faces must pass a LOWER distance (stricter), never a looser one.
-    threshold = distant if min_side < 90 else base
-    margin = float(cfg.get("match_margin", DEFAULT_MATCH_MARGIN))
-    min_quality = float(cfg.get("min_quality", 0.18))
-    attendance_quality = float(cfg.get("min_attendance_quality", 0.24))
-    confirm = max(2, int(cfg.get("confirmation_frames", DEFAULT_CONFIRM_FRAMES)))
-    window = max(confirm, int(cfg.get("confirmation_window", DEFAULT_CONFIRM_WINDOW)))
+    threshold = distant if min_side < 96 else base
+    base_margin = float(cfg.get("match_margin", DEFAULT_MATCH_MARGIN))
+    margin = max(base_margin, 0.10) if min_side < 96 else base_margin
+    configured_quality = float(cfg.get("min_quality", 0.24))
+    min_quality = max(configured_quality, 0.30) if min_side < 96 else configured_quality
+    attendance_quality = max(float(cfg.get("min_attendance_quality", 0.32)), 0.32)
+    confirm = max(3, int(cfg.get("confirmation_frames", DEFAULT_CONFIRM_FRAMES)))
+    if min_side < 96:
+        confirm = max(confirm, 5)
+    window = max(confirm + 1, int(cfg.get("confirmation_window", DEFAULT_CONFIRM_WINDOW)))
     return threshold, margin, recognition_min, attendance_min, min_quality, attendance_quality, confirm, window
 
 
@@ -422,88 +420,29 @@ def _match(embeddings: List[np.ndarray], bank: Dict[str, Any], company_id: str, 
             return {"name": None, "distance": None, "confidence": 0.0, "embedding": embeddings[0], "margin": 0.0, "hits": 0}
 
     threshold, required_margin, *_ = _thresholds(company_id, min_side)
-    indices = bank.get("person_indices") or {}
-    best_result = None
-    for embedding in embeddings:
-        if matrix.shape[1] != embedding.shape[0]:
-            continue
-        distances = np.linalg.norm(matrix - embedding.reshape(1, -1), axis=1)
-        people = []
-        for person, idx in indices.items():
-            person_distances = np.sort(distances[idx])
-            if person_distances.size == 0:
-                continue
-            minimum = float(person_distances[0])
-            hits = int(np.sum(person_distances <= threshold))
-            top_count = min(2, person_distances.size)
-            score_distance = float(np.mean(person_distances[:top_count]))
-            people.append((score_distance, minimum, person, hits, int(person_distances.size)))
-        if not people:
-            continue
-        people.sort(key=lambda x: (x[0], x[1]))
-        score_distance, minimum, person, hits, template_count = people[0]
-        second_score = people[1][0] if len(people) > 1 else 1.0
-        margin = float(second_score - score_distance)
-
-        required_hits = 2 if template_count >= 3 else 1
-        # A person with only one enrollment template receives an extra strict penalty.
-        effective_threshold = threshold - 0.02 if template_count == 1 else threshold
-        accepted = minimum <= effective_threshold and hits >= required_hits and (len(people) == 1 or margin >= required_margin)
-        result = {
-            "name": person if accepted else None,
-            "distance": minimum,
-            "score_distance": score_distance,
-            "confidence": float(np.clip(1.0 - minimum, 0.0, 1.0)),
-            "embedding": embedding,
-            "margin": margin,
-            "hits": hits,
-            "threshold": effective_threshold,
-        }
-        if accepted and (best_result is None or minimum < best_result["distance"]):
-            best_result = result
-        elif best_result is None:
-            best_result = result
-    return best_result or {"name": None, "distance": None, "confidence": 0.0, "embedding": embeddings[0] if embeddings else None, "margin": 0.0, "hits": 0}
+    from recognition.identity_guard import conservative_dlib_match
+    return conservative_dlib_match(
+        embeddings,
+        matrix,
+        bank.get("person_indices") or {},
+        threshold,
+        required_margin,
+    )
 
 
 def _update_identity(track: Dict[str, Any], match: Dict[str, Any], quality: float, company_id: str, min_side: int) -> None:
-    threshold, margin_req, _, _, min_quality, _, confirm_frames, window = _thresholds(company_id, min_side)
-    history: deque = track["history"]
-    # Resize history if tenant settings changed.
-    if history.maxlen != window:
-        history = deque(list(history)[-window:], maxlen=window)
-        track["history"] = history
-
-    candidate = match.get("name") if quality >= min_quality else None
-    history.append(candidate)
-    confirmed = track.get("confirmed_name")
-
-    if confirmed:
-        if candidate and candidate != confirmed and match.get("distance") is not None and match.get("margin", 0) >= margin_req:
-            track["conflict_streak"] = int(track.get("conflict_streak", 0)) + 1
-        elif candidate == confirmed:
-            track["conflict_streak"] = 0
-        # Revoke a label after two strong contradictory observations. This prevents
-        # a tracker ID swap in a crowd from carrying the previous person's name.
-        if track.get("conflict_streak", 0) >= 2:
-            track["confirmed_name"] = None
-            track["confirmed_at"] = None
-            track["history"].clear()
-            track["history"].append(candidate)
-            track["conflict_streak"] = 0
-        return
-
-    counts = Counter(name for name in history if name)
-    if not counts:
-        return
-    name, count = counts.most_common(1)[0]
-    if count >= confirm_frames:
-        # Competing identities inside the confirmation window make the track ambiguous.
-        competitors = sum(v for k, v in counts.items() if k != name)
-        if competitors <= 1:
-            track["confirmed_name"] = name
-            track["confirmed_at"] = time.time()
-            track["conflict_streak"] = 0
+    _, _, recognition_min, _, min_quality, _, confirm_frames, window = _thresholds(company_id, min_side)
+    from recognition.identity_guard import update_track_identity
+    update_track_identity(
+        track,
+        match,
+        quality=quality,
+        min_quality=min_quality,
+        confirm_frames=confirm_frames,
+        window=window,
+        min_side=min_side,
+        recognition_min=recognition_min,
+    )
 
 
 def _display_name(person_key: str, company_id: str) -> str:
@@ -664,6 +603,11 @@ def process_frame(
             "event_direction": event_direction,
             "model_version": match.get("model_version") or ("arcface-512" if embeddings and embeddings[0].shape[0] == 512 else "dlib-128-consensus-v2"),
         })
+
+    # Final duplicate suppression: raw detector NMS is repeated after tracking so
+    # one physical face can never render or persist two overlapping result boxes.
+    from recognition.detection_guard import suppress_overlapping_results
+    results = suppress_overlapping_results(results)
 
     # One physical identity may appear at most once in one frame. If two distinct
     # boxes resolve to the same employee, only the strongest observation keeps the

@@ -25,7 +25,7 @@ BASE_DIR = BACKEND_FACE_DIR / "captured_faces"
 KNOWN_DIRNAME = "known"
 UNKNOWN_DIRNAME = "unknown"
 DEFAULT_MIN_SAVE_INTERVAL_SECONDS = float(os.getenv("FACE_IMAGE_SAVE_INTERVAL", "30"))
-MIN_KNOWN_SAVE_CONFIDENCE = float(os.getenv("FACE_MIN_KNOWN_SAVE_CONFIDENCE", "0.50"))
+MIN_KNOWN_SAVE_CONFIDENCE = float(os.getenv("FACE_MIN_KNOWN_SAVE_CONFIDENCE", "0.55"))
 MIN_UNKNOWN_DETECTION_CONFIDENCE = float(os.getenv("FACE_MIN_UNKNOWN_DET_CONFIDENCE", "0.60"))
 
 _last_saved_time: Dict[str, float] = {}
@@ -79,7 +79,7 @@ def _bbox_to_ltrb(bbox: Tuple, frame_shape: Tuple[int, ...]) -> Tuple[int, int, 
     )
 
 
-def _prepare_crop(face_crop_bgr: np.ndarray, target_width: int = 320, max_upscale: float = 4.0) -> np.ndarray:
+def _prepare_crop(face_crop_bgr: np.ndarray, target_width: int = 384, max_upscale: float = 3.0) -> np.ndarray:
     image = face_crop_bgr.copy()
     h, w = image.shape[:2]
     min_side = min(h, w)
@@ -88,10 +88,8 @@ def _prepare_crop(face_crop_bgr: np.ndarray, target_width: int = 320, max_upscal
         if scale > 1.05:
             image = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
     try:
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        image = cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
+        from recognition.evidence_quality import enhance_for_review
+        image = enhance_for_review(image)
     except Exception:
         pass
     return image
@@ -106,9 +104,9 @@ def save_face_image(
     min_interval: float = DEFAULT_MIN_SAVE_INTERVAL_SECONDS,
     source: str = "stream",
     expand_factor: float = 0.35,
-    target_width: Optional[int] = 320,
-    max_upscale: float = 4.0,
-    jpeg_quality: int = 94,
+    target_width: Optional[int] = 384,
+    max_upscale: float = 3.0,
+    jpeg_quality: int = 96,
     stream_id: Optional[str] = None,
     prefer_png: bool = False,
     camera_name: Optional[str] = None,

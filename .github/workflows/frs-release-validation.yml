@@ -53,6 +53,9 @@ jobs:
       - name: Verify Python syntax
         run: python -m compileall -q backend_face scripts
 
+      - name: Install recognition test dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir numpy==1.26.4
+
       - name: Run production guardrail tests
         run: |
           python -m unittest backend_face.tests.test_production_guardrails

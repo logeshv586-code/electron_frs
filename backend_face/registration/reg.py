@@ -564,8 +564,15 @@ async def update_person_status(person_id: str, body: StatusUpdate, request: Requ
         merged["metadata"] = {}
     upsert_person(company_id, person_id, merged)
     try:
-        from face_pipeline import clear_company_embeddings_cache
+        from face_pipeline import clear_company_embeddings_cache, invalidate_person_tracking
         clear_company_embeddings_cache(company_id)
+        if status != "Active":
+            invalidate_person_tracking(company_id, person_id)
+    except Exception:
+        pass
+    try:
+        from cache.redis_cache import get_event_cache
+        get_event_cache().invalidate_face_bank(company_id)
     except Exception:
         pass
     write_audit(
@@ -585,6 +592,12 @@ async def delete_registered_person(person_id: str, request: Request):
     person = get_person(company_id, person_id)
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
+    try:
+        from recognition.vector_store import delete_person_vectors
+        delete_person_vectors(company_id, person_id)
+    except Exception as exc:
+        logger.warning("Could not purge ArcFace vectors for %s/%s: %s", company_id, person_id, exc)
+
     if not delete_person(company_id, person_id):
         raise HTTPException(status_code=404, detail="Person not found")
 
@@ -595,8 +608,14 @@ async def delete_registered_person(person_id: str, request: Request):
             if camera_dir.is_dir():
                 shutil.rmtree(camera_dir / person_id, ignore_errors=True)
     try:
-        from face_pipeline import clear_company_embeddings_cache
+        from face_pipeline import clear_company_embeddings_cache, invalidate_person_tracking
         clear_company_embeddings_cache(company_id)
+        invalidate_person_tracking(company_id, person_id)
+    except Exception:
+        pass
+    try:
+        from cache.redis_cache import get_event_cache
+        get_event_cache().invalidate_face_bank(company_id)
     except Exception:
         pass
     write_audit(

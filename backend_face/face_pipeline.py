@@ -191,6 +191,29 @@ def clear_company_embeddings_cache(company_id: str) -> None:
         company_embeddings.pop(str(company_id or "default"), None)
 
 
+def invalidate_person_tracking(company_id: str, person_key: str) -> None:
+    """Immediately revoke an identity already latched on live tracks.
+
+    Stream tracking is intentionally short lived, but registration status/delete must
+    take effect immediately instead of waiting for a track timeout.
+    """
+    person_key = str(person_key or "").strip().lower()
+    if not person_key:
+        return
+    with tracking_lock:
+        for tracks in person_tracking.values():
+            for track in tracks.values():
+                if str(track.get("confirmed_name") or "").strip().lower() == person_key:
+                    track["confirmed_name"] = None
+                    track["confirmed_at"] = None
+                    track["identity_blocked"] = True
+                    track["identity_block_reason"] = "person-disabled-or-deleted"
+                    track["conflict_streak"] = 0
+                    history = track.get("history")
+                    if hasattr(history, "clear"):
+                        history.clear()
+
+
 def load_company_embeddings(company_id: str) -> Dict[str, Any]:
     company_id = str(company_id or "default")
     with embedding_lock:

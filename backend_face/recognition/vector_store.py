@@ -153,6 +153,22 @@ def replace_person_vectors(
     return inserted
 
 
+def delete_person_vectors(company_id: str, person_key: str) -> int:
+    """Permanently remove all ArcFace templates for one tenant/person."""
+    if not ensure_vector_schema():
+        return 0
+    company_id = str(company_id or "default")
+    person_key = str(person_key).strip().lower()
+    with db_connection() as conn:
+        cur = conn.cursor()
+        placeholder = "%s" if is_postgres() else "?"
+        cur.execute(
+            f"DELETE FROM face_vectors_512 WHERE company_id={placeholder} AND person_key={placeholder}",
+            (company_id, person_key),
+        )
+        return max(int(cur.rowcount or 0), 0)
+
+
 def load_arcface_bank(company_id: str) -> Dict[str, object]:
     if not ensure_vector_schema():
         return {"matrix": np.empty((0, 512), dtype=np.float32), "names": [], "person_indices": {}, "model": "arcface-512"}
@@ -163,7 +179,15 @@ def load_arcface_bank(company_id: str) -> Dict[str, object]:
         cur = conn.cursor()
         placeholder = "%s" if is_postgres() else "?"
         cur.execute(
-            f"SELECT person_key, embedding FROM face_vectors_512 WHERE company_id={placeholder} ORDER BY person_key,template_key",
+            f"""
+            SELECT fv.person_key, fv.embedding
+            FROM face_vectors_512 fv
+            JOIN persons p
+              ON p.company_id=fv.company_id AND p.person_key=fv.person_key
+            WHERE fv.company_id={placeholder}
+              AND LOWER(COALESCE(p.status,'active'))='active'
+            ORDER BY fv.person_key,fv.template_key
+            """,
             (company_id,),
         )
         rows = cur.fetchall()
@@ -208,11 +232,14 @@ def search_arcface(company_id: str, embedding: Sequence[float], top_k: int = 25)
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT person_key,template_key,quality,model_version,
-                       1 - (embedding <=> %s) AS similarity
-                FROM face_vectors_512
-                WHERE company_id=%s
-                ORDER BY embedding <=> %s
+                SELECT fv.person_key,fv.template_key,fv.quality,fv.model_version,
+                       1 - (fv.embedding <=> %s) AS similarity
+                FROM face_vectors_512 fv
+                JOIN persons p
+                  ON p.company_id=fv.company_id AND p.person_key=fv.person_key
+                WHERE fv.company_id=%s
+                  AND LOWER(COALESCE(p.status,'active'))='active'
+                ORDER BY fv.embedding <=> %s
                 LIMIT %s
                 """,
                 (vector, company_id, vector, top_k),

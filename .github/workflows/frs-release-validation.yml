@@ -36,9 +36,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Apply deterministic source fixes
+      - name: Apply current recognition hardening
         run: |
-          python scripts/finalize_frs_source.py
+          # The foundational production finalizer has already been committed to this
+          # branch. Only current idempotent recognition/evidence hardeners run here.
           python scripts/harden_live_recognition.py
           python scripts/harden_gallery_evidence.py
 

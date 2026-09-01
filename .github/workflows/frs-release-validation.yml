@@ -78,7 +78,7 @@ jobs:
           grep -q 'Sapphire' frontend/src/components/layout/MainLayout.js
           grep -q 'REFERENCE_ONLY' frontend/src/components/camera/AddCameraForm.js
           grep -q 'line_x1' frontend/src/components/camera/AddCameraForm.js
-          grep -q 'AuthenticatedImage' frontend/src/components/FaceGallery.js
+          grep -q 'AuthenticatedImage' frontend/src/components/PersonCard.js
           grep -q 'FRS_ARCFACE_MODEL_PATH' backend_face/recognition/arcface.py
           grep -q 'vector_cosine_ops' backend_face/recognition/vector_store.py
           grep -q 'FRS_LIVENESS_MODEL_PATH' backend_face/recognition/liveness.py

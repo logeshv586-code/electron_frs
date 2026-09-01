@@ -40,6 +40,7 @@ jobs:
         run: |
           python scripts/finalize_frs_source.py
           python scripts/harden_live_recognition.py
+          python scripts/harden_gallery_evidence.py
 
       - name: Remove tracked runtime and biometric data
         shell: bash
@@ -96,6 +97,11 @@ jobs:
           grep -q 'update_track_identity' backend_face/face_pipeline.py
           grep -q 'suppress_overlapping_results' backend_face/face_pipeline.py
           grep -q 'evidence_score' backend_face/camera_management/streaming.py
+          grep -q 'DETECTION_MIN_CONFIDENCE' backend_face/face_pipeline.py
+          grep -q 'KNOWN_IMAGE_INTERVAL_SECONDS' backend_face/face_pipeline.py
+          grep -q 'identity_key=item\["name"\]' backend_face/face_pipeline.py
+          grep -q 'identity_key=cluster_key' backend_face/face_pipeline.py
+          grep -q '_camera_name_for_stream' backend_face/face_pipeline.py
           grep -q 'FRS_ENABLE_PUBLIC_BIOMETRIC_STATIC' backend_face/main.py
           grep -q 'FRS_ENABLE_LEGACY_MATCHING' backend_face/main.py
           ! grep -q 'allow_origins=\["\*"\]' backend_face/main.py

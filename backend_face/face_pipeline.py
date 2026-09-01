@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Detection remains aggressive; recognition/attendance are intentionally stricter.
 DETECTION_MIN_FACE_PX = int(os.getenv("FACE_DETECTION_MIN_PX", "20"))
+DETECTION_MIN_CONFIDENCE = float(os.getenv("FACE_DETECTION_CONFIDENCE", "0.55"))
 DEFAULT_RECOGNITION_MIN_PX = int(os.getenv("FACE_RECOGNITION_MIN_PX", "64"))
 DEFAULT_ATTENDANCE_MIN_PX = int(os.getenv("FACE_ATTENDANCE_MIN_PX", "88"))
 DEFAULT_DISTANCE_THRESHOLD = float(os.getenv("FACE_MATCH_DISTANCE", "0.42"))
@@ -469,6 +470,17 @@ def _best_crop(stream_id: Optional[str], track_id: int, frame: np.ndarray, bbox:
     return crop
 
 
+def _camera_name_for_stream(stream_id: Optional[str]) -> Optional[str]:
+    if not stream_id:
+        return stream_id
+    try:
+        from camera_management.streaming import get_stream_manager
+        info = get_stream_manager().get_stream_info(stream_id) or {}
+        return info.get("camera_name") or stream_id
+    except Exception:
+        return stream_id
+
+
 def process_frame(
     frame_bgr: np.ndarray,
     force_process: bool = False,
@@ -507,10 +519,13 @@ def process_frame(
         fw, fh = x2 - x1, y2 - y1
         if fw < DETECTION_MIN_FACE_PX or fh < DETECTION_MIN_FACE_PX:
             continue
+        det_conf = float(getattr(face, "det_score", 0.0) or getattr(face, "score", 0.0) or 0.0)
+        if det_conf < DETECTION_MIN_CONFIDENCE:
+            continue
         kps = getattr(face, "kps", None)
         raw.append({
             "bbox": (x1, y1, x2, y2),
-            "det_conf": float(getattr(face, "det_score", 0.0) or getattr(face, "score", 0.0) or 0.0),
+            "det_conf": det_conf,
             "kps": np.asarray(kps, dtype=np.float32).reshape(-1, 2).tolist() if kps is not None else None,
         })
     raw = _dedupe_boxes(raw)
@@ -650,11 +665,11 @@ def process_frame(
                         face_crop_bgr=crop,
                         label=item["name"],
                         confidence=item["conf"],
-                        min_interval=0,
+                        min_interval=KNOWN_IMAGE_INTERVAL_SECONDS,
                         source="stream",
-                        camera_name=stream_id,
+                        camera_name=_camera_name_for_stream(stream_id),
                         company_id=company_id,
-                        identity_key=f"{item['name']}:{track_id}",
+                        identity_key=item["name"],
                     )
                     if saved:
                         image_path = str(saved)
@@ -712,11 +727,11 @@ def process_frame(
                             face_crop_bgr=crop,
                             label="Unknown",
                             confidence=item["det_conf"],
-                            min_interval=0,
+                            min_interval=UNKNOWN_IMAGE_INTERVAL_SECONDS,
                             source="stream",
                             camera_name=camera_name,
                             company_id=company_id,
-                            identity_key=f"unknown:{track_id}",
+                            identity_key=cluster_key,
                             unknown_cluster_id=cluster_key,
                         )
                         record_face_event(
